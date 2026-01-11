@@ -1,12 +1,23 @@
 #!/bin/bash
 
-# Claude Code Orchestrator Template - Install Script
-# This script sets up the orchestrator in the current project
+# Claude Code Orchestrator Template - Basic Install Script
+# This script copies the base template files to your project.
+#
+# NOTE: This is a BASIC install that copies generic template files.
+# For intelligent setup with custom agents tailored to your codebase,
+# use Claude Code instead:
+#
+#   1. Run: claude
+#   2. Paste: Fetch https://raw.githubusercontent.com/LyricalString/claude-orchestrator-template/main/SETUP_PROMPT.md and follow those instructions
+#
 
 set -e
 
-echo "Claude Code Orchestrator - Installation"
-echo "========================================"
+echo "Claude Code Orchestrator - Basic Installation"
+echo "=============================================="
+echo ""
+echo "NOTE: This copies generic template files."
+echo "For custom agents tailored to your project, use the SETUP_PROMPT method instead."
 echo ""
 
 # Check for required tools
@@ -96,17 +107,33 @@ main() {
 
     # Summary
     echo ""
-    echo "Installation complete!"
+    echo "Basic installation complete!"
     echo ""
-    echo "Files created:"
-    echo "  - .claude/agents/     (agent definitions)"
+    echo "Files copied:"
+    echo "  - .claude/agents/     (GENERIC agent templates)"
     echo "  - .claude/commands/   (slash commands)"
-    echo "  - .claude/plans/      (PLAN files)"
-    echo "  - .claude/logs/       (agent logs)"
+    echo "  - .claude/plans/      (PLAN files directory)"
+    echo "  - .claude/logs/       (agent logs directory)"
     echo "  - mcp-orchestrator/   (MCP server)"
     if [ ! -f "AGENTS.md" ]; then
-        echo "  - AGENTS.md           (coding guidelines)"
+        echo "  - AGENTS.md           (coding guidelines template)"
     fi
+    echo ""
+    echo "=============================================="
+    echo "IMPORTANT: You have GENERIC template agents!"
+    echo "=============================================="
+    echo ""
+    echo "The agents (frontend.md, api.md, database.md) are generic templates."
+    echo "You should customize them for your specific project."
+    echo ""
+    echo "OPTION A: Automatic Customization (Recommended)"
+    echo "  Run Claude Code and use /generate-agent to create custom agents:"
+    echo "  /generate-agent apps/your-app"
+    echo ""
+    echo "OPTION B: Manual Customization"
+    echo "  1. Edit .claude/agents/orchestrator.md (update routing table)"
+    echo "  2. Edit or replace .claude/agents/*.md for your apps"
+    echo "  3. Delete unused template agents (api.md, frontend.md, database.md)"
     echo ""
     echo "Next steps:"
     echo ""
@@ -126,12 +153,7 @@ main() {
     echo '     }'
     echo '   }'
     echo ""
-    echo "2. Customize agents for your project:"
-    echo "   - Edit .claude/agents/orchestrator.md (routing table)"
-    echo "   - Use /generate-agent to create app-specific agents"
-    echo "   - Delete unused template agents"
-    echo ""
-    echo "3. Test the setup in Claude Code:"
+    echo "2. Test the setup in Claude Code:"
     echo "   /investigate \"overview of this project\""
     echo ""
 }

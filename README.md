@@ -4,7 +4,7 @@ A powerful multi-agent orchestration system for [Claude Code](https://docs.anthr
 
 ---
 
-## Quick Install
+## Quick Install (Recommended)
 
 > **Requires**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed (`npm install -g @anthropic-ai/claude-code`)
 
@@ -25,7 +25,7 @@ Fetch https://raw.githubusercontent.com/LyricalString/claude-orchestrator-templa
 
 ### Step 3: Follow the prompts
 
-The AI will guide you through a multi-phase setup:
+Claude will analyze your codebase and create **custom agents tailored to your project**. This is an intelligent setup that:
 
 #### Phase 1: Pre-flight
 
@@ -146,9 +146,9 @@ Tracks complex tasks across sessions. Leave and return anytime with `/continue-p
 
 ---
 
-## Manual Installation
+## Manual Installation (Basic)
 
-If you prefer to set things up yourself:
+> **Note**: This only copies the base template files. You'll need to customize agents manually. For automatic customization, use the [Quick Install](#quick-install-recommended) method above.
 
 ```bash
 # Clone and copy
@@ -163,8 +163,13 @@ cd mcp-orchestrator && bun install && cd ..
 # Clean up
 rm -rf /tmp/orc-template
 
-# Add MCP server to your claude_desktop_config.json
-# See MCP Configuration section below
+# Add MCP server to your settings (see MCP Configuration below)
+```
+
+Or use the install script:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/LyricalString/claude-orchestrator-template/main/install.sh | bash
 ```
 
 ### MCP Configuration
