@@ -1,11 +1,16 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { Agent } from "../types";
 
 export function useAgentsSSE(projectId?: number) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [connected, setConnected] = useState(false);
+  const hasReceivedData = useRef(false);
 
   useEffect(() => {
+    // Reset data state on project change
+    hasReceivedData.current = false;
+    setConnected(false);
+
     const url = projectId
       ? `/api/events?project_id=${projectId}`
       : "/api/events";
@@ -13,9 +18,17 @@ export function useAgentsSSE(projectId?: number) {
     const eventSource = new EventSource(url);
 
     eventSource.onopen = () => setConnected(true);
-    eventSource.onerror = () => setConnected(false);
+    eventSource.onerror = () => {
+      // Only set disconnected if we haven't received data yet
+      // This prevents "Loading..." flicker during reconnection
+      if (!hasReceivedData.current) {
+        setConnected(false);
+      }
+    };
 
     eventSource.addEventListener("agents", (e) => {
+      hasReceivedData.current = true;
+      setConnected(true);
       const data = JSON.parse(e.data);
       setAgents(
         data.map((agent: Agent) => ({

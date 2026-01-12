@@ -383,6 +383,7 @@ Started: ${new Date().toISOString()}
   const proc = spawn("claude", [
     "-p", fullPrompt,
     "--allowedTools", allowedTools,
+    "--verbose",
     "--output-format", "stream-json"
   ], {
     detached: true,

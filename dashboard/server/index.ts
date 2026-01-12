@@ -176,13 +176,30 @@ app.get("/api/events", async (c) => {
   const projectId = c.req.query("project_id");
   const agentId = c.req.query("agent_id");
 
+  // Track cleanup state
+  let keepAlive: ReturnType<typeof setInterval> | null = null;
+  let fileWatcher: ReturnType<typeof chokidar.watch> | null = null;
+  let isClosed = false;
+
+  const cleanup = () => {
+    if (isClosed) return;
+    isClosed = true;
+    if (keepAlive) clearInterval(keepAlive);
+    if (fileWatcher) fileWatcher.close();
+  };
+
   return new Response(
     new ReadableStream({
-      async start(controller) {
+      start(controller) {
         const encoder = new TextEncoder();
 
         const send = (event: string, data: unknown) => {
-          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+          if (isClosed) return;
+          try {
+            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+          } catch {
+            cleanup();
+          }
         };
 
         // Send initial data
@@ -205,8 +222,8 @@ app.get("/api/events", async (c) => {
           ? getAgent(agentId)?.log_file
           : LOGS_DIR;
 
-        if (watchPath) {
-          const fileWatcher = chokidar.watch(watchPath, {
+        if (watchPath && existsSync(watchPath)) {
+          fileWatcher = chokidar.watch(watchPath, {
             persistent: true,
             ignoreInitial: true,
           });
@@ -237,21 +254,21 @@ app.get("/api/events", async (c) => {
           });
 
           // Keep alive ping every 30 seconds
-          const keepAlive = setInterval(() => {
+          keepAlive = setInterval(() => {
+            if (isClosed) return;
             try {
               controller.enqueue(encoder.encode(": keepalive\n\n"));
             } catch {
-              clearInterval(keepAlive);
-              fileWatcher.close();
+              cleanup();
             }
           }, 30000);
-
-          // Cleanup on close
-          c.req.raw.signal.addEventListener("abort", () => {
-            clearInterval(keepAlive);
-            fileWatcher.close();
-          });
         }
+
+        // Cleanup on abort
+        c.req.raw.signal.addEventListener("abort", cleanup);
+      },
+      cancel() {
+        cleanup();
       },
     }),
     {
