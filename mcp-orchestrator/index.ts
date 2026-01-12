@@ -198,24 +198,69 @@ Error: ${err.message}
 }
 
 /**
- * Get the status and output of an agent
+ * Check if an agent process is still running
  */
-function getAgentStatus(taskId: string): { task: AgentTask; output: string } | { error: string } {
+function isAgentRunning(task: AgentTask): boolean {
+  if (task.status !== "running" || !task.pid) {
+    return false;
+  }
+  try {
+    // Send signal 0 to check if exists
+    process.kill(task.pid, 0);
+    return true;
+  } catch {
+    // Process no longer exists
+    task.status = "completed";
+    task.completedAt = new Date();
+    return false;
+  }
+}
+
+/**
+ * Wait for an agent to complete (blocking)
+ */
+async function waitForAgent(task: AgentTask, timeoutMs: number): Promise<void> {
+  const startTime = Date.now();
+  const pollInterval = 500; // Check every 500ms
+
+  while (isAgentRunning(task)) {
+    if (Date.now() - startTime > timeoutMs) {
+      throw new Error(`Timeout waiting for agent after ${timeoutMs}ms`);
+    }
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+  }
+}
+
+/**
+ * Get the status and output of an agent
+ * @param block - If true, wait for agent to complete before returning
+ * @param timeoutMs - Maximum time to wait in milliseconds (default: 5 minutes)
+ */
+async function getAgentStatus(
+  taskId: string,
+  block: boolean = false,
+  timeoutMs: number = 300000
+): Promise<{ task: AgentTask; output: string; timedOut?: boolean } | { error: string }> {
   const task = runningAgents.get(taskId);
   if (!task) {
     return { error: `Task '${taskId}' not found` };
   }
 
-  // Check if process is still running
-  if (task.status === "running" && task.pid) {
+  // If blocking, wait for completion
+  if (block && task.status === "running") {
     try {
-      // Send signal 0 to check if exists
-      process.kill(task.pid, 0);
-    } catch {
-      // Process no longer exists
-      task.status = "completed";
-      task.completedAt = new Date();
+      await waitForAgent(task, timeoutMs);
+    } catch (err: any) {
+      // Read current output even on timeout
+      let output = "";
+      if (fs.existsSync(task.logFile)) {
+        output = fs.readFileSync(task.logFile, "utf-8");
+      }
+      return { task, output, timedOut: true };
     }
+  } else {
+    // Non-blocking: just check current status
+    isAgentRunning(task);
   }
 
   // Read log
@@ -302,12 +347,14 @@ server.tool(
 // Tool: get_agent_status
 server.tool(
   "get_agent_status",
-  "Get the status and output of a running or completed agent task.",
+  "Get the status and output of a running or completed agent task. Use block=true to wait for completion.",
   {
-    taskId: z.string().describe("The task ID returned by spawn_agent")
+    taskId: z.string().describe("The task ID returned by spawn_agent"),
+    block: z.boolean().optional().default(false).describe("If true, wait for agent to complete before returning (default: false)"),
+    timeout: z.number().optional().default(300000).describe("Maximum time to wait in milliseconds when blocking (default: 300000 = 5 minutes)")
   },
-  async ({ taskId }) => {
-    const result = getAgentStatus(taskId);
+  async ({ taskId, block, timeout }) => {
+    const result = await getAgentStatus(taskId, block, timeout);
 
     if ("error" in result) {
       return {
@@ -326,6 +373,7 @@ server.tool(
           startedAt: result.task.startedAt,
           completedAt: result.task.completedAt,
           exitCode: result.task.exitCode,
+          timedOut: result.timedOut || false,
           output: result.output
         }, null, 2)
       }]

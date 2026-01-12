@@ -105,10 +105,33 @@ The orchestrator uses an MCP server that provides these tools:
 | Tool | Purpose |
 | ---- | ------- |
 | `mcp__orchestrator__spawn_agent` | Launch a subagent with a specific task |
-| `mcp__orchestrator__get_agent_status` | Check status and read output of an agent |
+| `mcp__orchestrator__get_agent_status` | Check status and read output of an agent. **Use `block=true` to wait for completion** |
 | `mcp__orchestrator__list_agents` | List all available and spawned agents |
 | `mcp__orchestrator__kill_agent` | Terminate a running agent |
 | `mcp__orchestrator__read_agent_log` | Read the full log of an agent |
+
+### Waiting for Agents to Complete
+
+Use `get_agent_status` with `block=true` to wait synchronously for an agent to finish:
+
+```typescript
+// Non-blocking (default): returns immediately with current status
+mcp__orchestrator__get_agent_status({ taskId: "abc123" })
+
+// Blocking: waits until agent completes or timeout
+mcp__orchestrator__get_agent_status({ taskId: "abc123", block: true })
+
+// Blocking with custom timeout (10 minutes)
+mcp__orchestrator__get_agent_status({ taskId: "abc123", block: true, timeout: 600000 })
+```
+
+**Parameters:**
+- `taskId` (required): The task ID returned by `spawn_agent`
+- `block` (optional, default: `false`): If `true`, wait for agent to complete
+- `timeout` (optional, default: `300000`): Max wait time in ms when blocking (5 min default)
+
+**Response includes:**
+- `timedOut`: `true` if the timeout was reached before completion
 
 ---
 
