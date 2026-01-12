@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { AgentList } from "./components/AgentList";
 import { LogViewer } from "./components/LogViewer";
-import { useProjects, useAgents, useStats, useLogStream } from "./hooks/usePolling";
+import { useProjects, useStats } from "./hooks/usePolling";
+import { useAgentsSSE, useLogSSE } from "./hooks/useSSE";
 import type { Agent } from "./types";
 
 function App() {
@@ -10,9 +11,9 @@ function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
   const { projects, loading: projectsLoading } = useProjects();
-  const { agents, loading: agentsLoading } = useAgents(selectedProjectId ?? undefined);
+  const { agents, connected } = useAgentsSSE(selectedProjectId ?? undefined);
   const stats = useStats();
-  const log = useLogStream(selectedAgentId);
+  const log = useLogSSE(selectedAgentId);
 
   const selectedAgent: Agent | null =
     agents.find((a) => a.id === selectedAgentId) ?? null;
@@ -47,7 +48,7 @@ function App() {
         <div className="content">
           <AgentList
             agents={agents}
-            loading={agentsLoading}
+            loading={!connected}
             selectedAgentId={selectedAgentId}
             showProject={selectedProjectId === null}
             onSelectAgent={setSelectedAgentId}

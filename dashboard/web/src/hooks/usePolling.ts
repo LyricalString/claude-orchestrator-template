@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { Project, Agent, Stats, LogResponse } from "../types";
 
 const POLL_INTERVAL = 2000;
@@ -80,12 +80,12 @@ export function useStats() {
 
 export function useLogStream(agentId: string | null) {
   const [log, setLog] = useState("");
-  const [offset, setOffset] = useState(0);
+  const offsetRef = useRef(0);
 
   // Reset when agent changes
   useEffect(() => {
     setLog("");
-    setOffset(0);
+    offsetRef.current = 0;
   }, [agentId]);
 
   useEffect(() => {
@@ -93,12 +93,12 @@ export function useLogStream(agentId: string | null) {
 
     const poll = async () => {
       try {
-        const res = await fetch(`/api/agents/${agentId}/log?offset=${offset}`);
+        const res = await fetch(`/api/agents/${agentId}/log?offset=${offsetRef.current}`);
         const data: LogResponse = await res.json();
 
         if (data.content) {
           setLog((prev) => prev + data.content);
-          setOffset(data.size);
+          offsetRef.current = data.size;
         }
       } catch (err) {
         console.error("Failed to fetch log:", err);
@@ -108,7 +108,7 @@ export function useLogStream(agentId: string | null) {
     poll();
     const interval = setInterval(poll, 1000); // Faster polling for logs
     return () => clearInterval(interval);
-  }, [agentId, offset]);
+  }, [agentId]);
 
   return log;
 }

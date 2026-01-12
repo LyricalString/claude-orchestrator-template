@@ -41,9 +41,23 @@ db.run(`
     started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     completed_at DATETIME,
     exit_code INTEGER,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
     FOREIGN KEY (project_id) REFERENCES projects(id)
   )
 `);
+
+// Add token columns to existing tables (migration for existing DBs)
+try {
+  db.run(`ALTER TABLE agents ADD COLUMN input_tokens INTEGER DEFAULT 0`);
+} catch {
+  // Column already exists
+}
+try {
+  db.run(`ALTER TABLE agents ADD COLUMN output_tokens INTEGER DEFAULT 0`);
+} catch {
+  // Column already exists
+}
 
 // Create indexes
 db.run(`CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project_id)`);
@@ -93,6 +107,8 @@ export interface Agent {
   started_at: string;
   completed_at: string | null;
   exit_code: number | null;
+  input_tokens: number;
+  output_tokens: number;
 }
 
 export function getAllProjects(): Project[] {
@@ -164,20 +180,47 @@ export function updateAgentStatus(id: string, status: string, exitCode: number |
   `, [status, exitCode, id]);
 }
 
-export function getStats(): { running: number; completed: number; failed: number } {
-  const result = db.query<{ status: string; count: number }, []>(`
-    SELECT status, COUNT(*) as count
-    FROM agents
-    GROUP BY status
-  `).all();
+export function updateAgentTokens(id: string, inputTokens: number, outputTokens: number): void {
+  db.run(`
+    UPDATE agents
+    SET input_tokens = ?, output_tokens = ?
+    WHERE id = ?
+  `, [inputTokens, outputTokens, id]);
+}
 
-  const stats = { running: 0, completed: 0, failed: 0 };
-  for (const row of result) {
-    if (row.status in stats) {
-      stats[row.status as keyof typeof stats] = row.count;
-    }
-  }
-  return stats;
+export function getStats(): {
+  running: number;
+  completed: number;
+  failed: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+} {
+  const result = db.query<
+    {
+      running: number;
+      completed: number;
+      failed: number;
+      total_input_tokens: number;
+      total_output_tokens: number;
+    },
+    []
+  >(`
+    SELECT
+      COUNT(CASE WHEN status = 'running' THEN 1 END) as running,
+      COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
+      COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed,
+      COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+      COALESCE(SUM(output_tokens), 0) as total_output_tokens
+    FROM agents
+  `).get();
+
+  return result ?? {
+    running: 0,
+    completed: 0,
+    failed: 0,
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+  };
 }
 
 export function cleanupOldData(daysToKeep: number = 7): number {

@@ -21,12 +21,16 @@ export interface Agent {
   completed_at: string | null;
   exit_code: number | null;
   duration: number;
+  input_tokens: number;
+  output_tokens: number;
 }
 
 export interface Stats {
   running: number;
   completed: number;
   failed: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
 }
 
 export interface LogResponse {

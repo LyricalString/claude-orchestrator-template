@@ -10,9 +10,116 @@ You are setting up the Claude Code Orchestrator system in the user's current pro
 
 ---
 
+## Phase 0: User Preferences
+
+Before starting, explain what you're going to do and ask for user preferences.
+
+### Step 0.1: Explain the Setup Process
+
+Tell the user:
+
+```
+## Claude Code Orchestrator Setup
+
+I'm going to set up the orchestrator system in your project. Here's what I'll do:
+
+### Steps:
+1. **Pre-flight** - Check git status, verify global installation
+2. **Copy commands** - Generic slash commands to .claude/commands/
+3. **Analyze project** - Use parallel agents to understand your codebase
+4. **Generate agents** - Create custom agents tailored to your code
+5. **AGENTS.md** - Create or merge coding guidelines
+6. **Configure MCP** - Point to global installation
+
+### What gets created in your project:
+```
+.claude/
+├── agents/        ← Custom agents for YOUR project
+├── commands/      ← Slash commands (generic)
+├── plans/         ← PLAN files directory
+└── logs/          ← Local logs directory
+AGENTS.md          ← Project coding guidelines
+.claude/settings.json or .mcp.json ← MCP config
+```
+
+### What I WON'T touch:
+- Your existing code
+- Global installation (~/.claude-orchestrator/)
+- Other config files
+
+---
+
+**Options:**
+1. **Continue with all steps** (recommended)
+2. **Customize** - Choose which steps to run
+3. **More details** - Explain each step in depth
+4. **Cancel** - Stop setup
+
+Which option? (1/2/3/4)
+```
+
+**Wait for user response.**
+
+### Step 0.2: Handle User Choice
+
+- **Option 1 (Continue):** Proceed to Phase 1
+- **Option 2 (Customize):** Show checklist:
+  ```
+  Which steps do you want to run?
+
+  [x] Pre-flight checks
+  [x] Copy commands to .claude/commands/
+  [x] Analyze project structure
+  [x] Generate custom agents
+  [x] Create/merge AGENTS.md
+  [x] Configure MCP server
+
+  Reply with the numbers you want to SKIP (e.g., "skip 3,4" or "only 1,2,6")
+  ```
+  Then proceed with selected steps only.
+- **Option 3 (More details):** Explain each phase in detail, then ask again
+- **Option 4 (Cancel):** Stop
+
+---
+
 ## Phase 1: Pre-flight Checks
 
-### Step 1.1: Verify Git Status
+### Step 1.1: Verify Global Installation
+
+Check if the global installation exists:
+
+```bash
+ls ~/.claude-orchestrator/mcp-orchestrator/index.ts 2>/dev/null && echo "GLOBAL_OK" || echo "GLOBAL_MISSING"
+```
+
+**If GLOBAL_MISSING:**
+
+Tell the user:
+
+```
+## Global Installation Required
+
+The MCP server and Dashboard need to be installed globally first.
+
+Run this command in your terminal:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/LyricalString/claude-orchestrator-template/main/install-global.sh | bash
+```
+
+Or manually:
+```bash
+git clone https://github.com/LyricalString/claude-orchestrator-template.git /tmp/orc
+bash /tmp/orc/install-global.sh
+rm -rf /tmp/orc
+```
+
+After installation completes, come back and run this setup again.
+```
+
+**Stop here if global installation is missing.**
+
+### Step 1.2: Verify Git Status
 
 Run:
 
@@ -45,59 +152,41 @@ Which option? (1/2/3)
 
 ---
 
-## Phase 2: Download Template
+## Phase 2: Copy Template Files
 
-### Step 2.1: Clone and Copy
+### Step 2.1: Clone and Copy Commands Only
 
 Run these commands:
 
 ```bash
-git clone https://github.com/LyricalString/claude-orchestrator-template.git /tmp/orc-template
-cp -r /tmp/orc-template/.claude ./
-cp -r /tmp/orc-template/mcp-orchestrator ./
-cp -r /tmp/orc-template/dashboard ./
+git clone --depth 1 https://github.com/LyricalString/claude-orchestrator-template.git /tmp/orc-template
+
+# Create directories
+mkdir -p .claude/agents .claude/commands .claude/plans .claude/logs
+
+# Copy commands (generic, work for any project)
+cp -r /tmp/orc-template/.claude/commands/* .claude/commands/
+
+# Copy template agents (will be replaced with custom ones)
+cp -r /tmp/orc-template/.claude/agents/* .claude/agents/
+
+# Clean up
+rm -rf /tmp/orc-template
 ```
 
-**Note:** Do NOT copy AGENTS.md yet - we'll handle it in Phase 5.
+**Note:** We do NOT copy mcp-orchestrator/ or dashboard/ - those are in the global installation.
 
-### Step 2.2: Install Dependencies
-
-```bash
-cd mcp-orchestrator && bun install && cd ..
-cd dashboard && bun run install:all && bun run build && cd ..
-```
-
-### Step 2.3: Verify Copy
+### Step 2.2: Verify Copy
 
 ```bash
 ls .claude/agents/ .claude/commands/
-ls mcp-orchestrator/
-ls dashboard/server/ dashboard/web/
 ```
 
 Confirm files exist before proceeding.
 
-### Step 2.4: Dashboard Data Location
-
-The dashboard stores shared data at `~/.claude-orchestrator/`:
-- `orchestrator.db` - SQLite database (all projects share this)
-- `logs/` - Agent logs organized by project
-- `dashboard.pid` / `dashboard.port` - Runtime state
-
-The MCP server auto-starts the dashboard when needed. To start manually:
-```bash
-cd dashboard && bun run start
-```
-
-### Step 2.5: Clean Up
-
-```bash
-rm -rf /tmp/orc-template
-```
-
 ---
 
-## Phase 2.6: Read Existing Documentation
+## Phase 2.5: Read Existing Documentation
 
 **USE ASYNC AGENT** - Launch a Task agent to read documentation without bloating main context.
 
@@ -125,7 +214,7 @@ Return a structured summary:
 Keep the summary concise - we'll use it to inform agent generation.
 ```
 
-### Step 2.6.2: Present Documentation Findings
+### Step 2.5.2: Present Documentation Findings
 
 After the agent returns, tell the user:
 
@@ -336,7 +425,7 @@ Does this merge approach work? (yes / suggest changes)
 Copy from template and customize:
 
 ```bash
-cp /tmp/orc-template/AGENTS.md ./AGENTS.md
+curl -sSL https://raw.githubusercontent.com/LyricalString/claude-orchestrator-template/main/AGENTS.md -o AGENTS.md
 ```
 
 Then customize based on detected patterns.
@@ -403,23 +492,38 @@ Write the confirmed AGENTS.md (merged or new).
 
 ### Step 5.5: Configure MCP Server
 
+The MCP server is installed globally at `~/.claude-orchestrator/`. Configure it to work with this project.
+
+**Detect config location:**
+
+```bash
+# Check for existing .mcp.json (Claude Code's preferred location)
+if [ -f ".mcp.json" ]; then
+    echo "MCP_CONFIG=.mcp.json"
+elif [ -f ".claude/settings.json" ]; then
+    echo "MCP_CONFIG=.claude/settings.json"
+else
+    echo "MCP_CONFIG=.mcp.json"
+fi
+```
+
 Tell the user:
 
 ```
 ## MCP Server Configuration
 
-The orchestrator uses an MCP server to spawn subagents. Add this to your Claude Code settings.
+The orchestrator MCP server is installed globally. I need to configure this project to use it.
 
-### Option A: Project-level config (recommended)
+**Configuration file:** [.mcp.json or .claude/settings.json]
 
-Create or edit `.claude/settings.json` in your project:
+I'll add this configuration:
 
 ```json
 {
   "mcpServers": {
     "orchestrator": {
       "command": "bun",
-      "args": ["run", "mcp-orchestrator/index.ts"],
+      "args": ["run", "~/.claude-orchestrator/mcp-orchestrator/index.ts"],
       "env": {
         "PROJECT_ROOT": "."
       }
@@ -428,26 +532,16 @@ Create or edit `.claude/settings.json` in your project:
 }
 ```
 
-### Option B: Global config
+This tells Claude Code to:
+- Use the global MCP server (no duplication per project)
+- Set PROJECT_ROOT to the current directory (for project-specific agents)
 
-Add to `~/.claude.json`:
-
-```json
-{
-  "mcpServers": {
-    "orchestrator": {
-      "command": "bun",
-      "args": ["run", "[ABSOLUTE_PATH]/mcp-orchestrator/index.ts"],
-      "env": {
-        "PROJECT_ROOT": "[ABSOLUTE_PATH]"
-      }
-    }
-  }
-}
+Should I create/update this config? (yes/no)
 ```
 
-Would you like me to create the project-level config? (recommended)
-```
+**If yes:** Create or merge the config file.
+
+**Important:** Use the tilde path `~/.claude-orchestrator/` which Bun expands correctly.
 
 ---
 
@@ -477,19 +571,31 @@ Would you like me to create the project-level config? (recommended)
 | `/generate-agent path/` | Add new agent |
 | `/update-agent name` | Update existing agent |
 
-### MCP Server:
-- Location: `mcp-orchestrator/`
-- Config: [where the config was added]
+### Configuration:
+- **MCP Server**: ~/.claude-orchestrator/mcp-orchestrator/
+- **Dashboard**: ~/.claude-orchestrator/dashboard/
+- **Project Config**: [.mcp.json or .claude/settings.json]
+
+### Dashboard:
+The dashboard shows all agents across all projects.
+Start it with: `cd ~/.claude-orchestrator/dashboard && bun run start`
+Or it auto-starts when you use the orchestrator.
 
 ---
 
 ### Test the Setup:
 
+Restart Claude Code, then run:
+
+```
 /investigate "give me an overview of this project"
+```
 
 [If STASH_CREATED:]
 ### Don't Forget!
+```bash
 git stash pop
+```
 ```
 
 ---
@@ -498,6 +604,7 @@ git stash pop
 
 | Error                        | Resolution                              |
 | ---------------------------- | --------------------------------------- |
+| Global installation missing  | Run install-global.sh first             |
 | Git clone fails              | Check internet, retry                   |
 | bun install fails            | Try `npm install` instead               |
 | Analysis agent fails         | Report error, offer retry               |
@@ -506,11 +613,28 @@ git stash pop
 
 ---
 
+## Updating the Global Installation
+
+To update the MCP server and dashboard (not project-specific config):
+
+```bash
+~/.claude-orchestrator/bin/update.sh
+```
+
+This updates the global installation without touching:
+- Project-specific agents
+- Project-specific config
+- Database and logs
+
+---
+
 ## Key Principles
 
-1. **Use async agents for heavy analysis** - Keep main context clean
-2. **Documentation first** - Read existing docs before code analysis
-3. **Ask, don't assume** - Confirm with user before generating
-4. **Parallel when possible** - Launch independent analyses together
-5. **Return summaries, not raw data** - Agents should synthesize
-6. **Patterns over specifics** - Agents describe conventions and structure, not implementation details that change or can be looked up. Never infer or guess specific values (model names, endpoints, versions) - only include what you verify in the code.
+1. **Ask before acting** - Phase 0 gives user control over what happens
+2. **Global vs Project** - MCP server is global, agents are per-project
+3. **Use async agents for heavy analysis** - Keep main context clean
+4. **Documentation first** - Read existing docs before code analysis
+5. **Confirm with user** - Before generating agents
+6. **Parallel when possible** - Launch independent analyses together
+7. **Return summaries, not raw data** - Agents should synthesize
+8. **Patterns over specifics** - Agents describe conventions and structure, not implementation details that change or can be looked up. Never infer or guess specific values (model names, endpoints, versions) - only include what you verify in the code.

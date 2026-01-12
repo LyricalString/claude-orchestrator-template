@@ -175,6 +175,21 @@ function dbUpdateAgentStatus(id: string, status: string, exitCode: number | null
 }
 
 /**
+ * Update agent token usage in dashboard database
+ */
+function dbUpdateAgentTokens(taskId: string, inputTokens: number, outputTokens: number): void {
+  if (!db) return;
+
+  try {
+    db.run(`
+      UPDATE agents SET input_tokens = ?, output_tokens = ? WHERE id = ?
+    `, [inputTokens, outputTokens, taskId]);
+  } catch (err) {
+    console.error("[Dashboard] Failed to update agent tokens:", err);
+  }
+}
+
+/**
  * Check if dashboard server is running
  */
 function isDashboardRunning(): boolean {
@@ -242,6 +257,36 @@ function ensureDashboardRunning(): void {
 }
 
 // ============ Agent Logic ============
+
+/**
+ * Parse token usage from stream-json log content
+ */
+function parseTokenUsage(logContent: string): { inputTokens: number; outputTokens: number } {
+  let inputTokens = 0;
+  let outputTokens = 0;
+
+  // Parse JSONL format - each line is a JSON object
+  const lines = logContent.split('\n').filter(line => line.trim());
+  for (const line of lines) {
+    try {
+      const data = JSON.parse(line);
+      // Look for usage data in the response
+      if (data.usage) {
+        inputTokens += data.usage.input_tokens || 0;
+        outputTokens += data.usage.output_tokens || 0;
+      }
+      // Also check for result with usage
+      if (data.result?.usage) {
+        inputTokens += data.result.usage.input_tokens || 0;
+        outputTokens += data.result.usage.output_tokens || 0;
+      }
+    } catch {
+      // Skip non-JSON lines (like the header/footer we add)
+    }
+  }
+
+  return { inputTokens, outputTokens };
+}
 
 /**
  * Read an agent prompt from .claude/agents/
@@ -338,7 +383,7 @@ Started: ${new Date().toISOString()}
   const proc = spawn("claude", [
     "-p", fullPrompt,
     "--allowedTools", allowedTools,
-    "--output-format", "text"
+    "--output-format", "stream-json"
   ], {
     detached: true,
     stdio: ["ignore", logStream, logStream],
@@ -376,6 +421,17 @@ Started: ${new Date().toISOString()}
 
       // Update dashboard DB
       dbUpdateAgentStatus(taskId, task.status, code);
+
+      // Parse and update token usage
+      try {
+        const logContent = fs.readFileSync(logFile, "utf-8");
+        const { inputTokens, outputTokens } = parseTokenUsage(logContent);
+        if (inputTokens > 0 || outputTokens > 0) {
+          dbUpdateAgentTokens(taskId, inputTokens, outputTokens);
+        }
+      } catch (err) {
+        console.error("[Dashboard] Failed to parse token usage:", err);
+      }
 
       // Add log footer
       fs.appendFileSync(logFile, `\n---

@@ -171,6 +171,99 @@ app.get("/api/health", (c) => {
   return c.json({ status: "ok", pid: process.pid });
 });
 
+// SSE endpoint for real-time updates
+app.get("/api/events", async (c) => {
+  const projectId = c.req.query("project_id");
+  const agentId = c.req.query("agent_id");
+
+  return new Response(
+    new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+
+        const send = (event: string, data: unknown) => {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        };
+
+        // Send initial data
+        if (agentId) {
+          // Log streaming mode
+          const agent = getAgent(agentId);
+          if (agent && existsSync(agent.log_file)) {
+            const content = readFileSync(agent.log_file, "utf-8");
+            send("log", { content, reset: true });
+          }
+        } else {
+          // Agent list mode
+          const agents = getAgents(projectId ? parseInt(projectId) : undefined);
+          send("agents", agents);
+        }
+
+        // Set up file watcher for updates
+        let lastLogSize = 0;
+        const watchPath = agentId
+          ? getAgent(agentId)?.log_file
+          : LOGS_DIR;
+
+        if (watchPath) {
+          const fileWatcher = chokidar.watch(watchPath, {
+            persistent: true,
+            ignoreInitial: true,
+          });
+
+          fileWatcher.on("change", () => {
+            if (agentId) {
+              // Log update
+              const agent = getAgent(agentId);
+              if (agent && existsSync(agent.log_file)) {
+                const content = readFileSync(agent.log_file, "utf-8");
+                if (content.length > lastLogSize) {
+                  send("log", { content: content.slice(lastLogSize), reset: false });
+                  lastLogSize = content.length;
+                }
+              }
+            } else {
+              // Agent list update
+              const agents = getAgents(projectId ? parseInt(projectId) : undefined);
+              send("agents", agents);
+            }
+          });
+
+          fileWatcher.on("add", () => {
+            if (!agentId) {
+              const agents = getAgents(projectId ? parseInt(projectId) : undefined);
+              send("agents", agents);
+            }
+          });
+
+          // Keep alive ping every 30 seconds
+          const keepAlive = setInterval(() => {
+            try {
+              controller.enqueue(encoder.encode(": keepalive\n\n"));
+            } catch {
+              clearInterval(keepAlive);
+              fileWatcher.close();
+            }
+          }, 30000);
+
+          // Cleanup on close
+          c.req.raw.signal.addEventListener("abort", () => {
+            clearInterval(keepAlive);
+            fileWatcher.close();
+          });
+        }
+      },
+    }),
+    {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      },
+    }
+  );
+});
+
 // Serve static files from web/dist in production
 const webDistPath = join(import.meta.dirname, "..", "web", "dist");
 if (existsSync(webDistPath)) {
@@ -187,17 +280,6 @@ if (existsSync(webDistPath)) {
   });
 }
 
-// Watch logs directory for changes (for future WebSocket streaming)
-const watcher = chokidar.watch(LOGS_DIR, {
-  persistent: true,
-  ignoreInitial: true,
-});
-
-watcher.on("change", (path) => {
-  // Could emit WebSocket events here in the future
-  // console.log(`Log file changed: ${path}`);
-});
-
 // Start server with dynamic port
 async function start() {
   const port = await findAvailablePort(BASE_PORT, MAX_PORT);
@@ -208,6 +290,7 @@ async function start() {
 
   const server = Bun.serve({
     port,
+    hostname: "localhost",
     fetch: app.fetch,
   });
 

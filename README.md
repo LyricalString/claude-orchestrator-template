@@ -4,63 +4,62 @@ A powerful multi-agent orchestration system for [Claude Code](https://docs.anthr
 
 ---
 
-## Quick Install (Recommended)
+## Installation
+
+The orchestrator has two parts:
+1. **Global installation** - MCP server + Dashboard (one per machine)
+2. **Project setup** - Custom agents + commands (one per project)
+
+### Step 1: Global Installation (Once)
+
+Install the MCP server and Dashboard globally:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/LyricalString/claude-orchestrator-template/main/install-global.sh | bash
+```
+
+This installs to `~/.claude-orchestrator/`:
+- `mcp-orchestrator/` - MCP server
+- `dashboard/` - Web dashboard
+- `bin/update.sh` - Update script
+
+### Step 2: Project Setup (Per Project)
 
 > **Requires**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed (`npm install -g @anthropic-ai/claude-code`)
 
-### Step 1: Open Claude Code in your project
+Open Claude Code in your project:
 
 ```bash
 cd your-project
 claude
 ```
 
-### Step 2: Send this message
-
-Copy and paste this into Claude Code:
+Then paste this message:
 
 ```
 Fetch https://raw.githubusercontent.com/LyricalString/claude-orchestrator-template/main/SETUP_PROMPT.md and follow those instructions to set up the orchestrator in my project
 ```
 
-### Step 3: Follow the prompts
+Claude will:
+1. Ask what you want to customize (or continue with defaults)
+2. Verify the global installation exists
+3. Copy commands to `.claude/commands/`
+4. Analyze your project with parallel agents
+5. Generate custom agents for your codebase
+6. Create/merge `AGENTS.md`
+7. Configure MCP to use the global installation
 
-Claude will analyze your codebase and create **custom agents tailored to your project**. This is an intelligent setup that:
+---
 
-#### Phase 1: Pre-flight
+## Updating
 
-- Check git status (offers to stash uncommitted changes)
-- Download and copy template files
-- Install MCP server dependencies
+To update the MCP server and dashboard:
 
-#### Phase 2: Documentation Discovery
+```bash
+~/.claude-orchestrator/bin/update.sh
+```
 
-- Scan for README, CONTRIBUTING, ARCHITECTURE, existing AGENTS.md
-- Present findings and ask for any additional context
-
-#### Phase 3: Project Analysis (4 parallel agents)
-
-- **Stack Agent**: Detect monorepo tools, languages, frameworks, package manager
-- **Apps Agent**: Find all apps/packages with their purpose
-- **Services Agent**: Detect database, auth, external integrations
-- **Quality Agent**: Find test frameworks, linters, CI/CD
-
-#### Phase 4: AGENTS.md
-
-- If you have one: Propose merge with orchestrator additions
-- If not: Generate one based on your conventions
-
-#### Phase 5: Agent Generation
-
-- Update orchestrator routing table
-- Generate specialized agent for each app (in parallel)
-- Clean up unused template agents
-- Configure MCP server in `claude_desktop_config.json`
-
-#### Phase 6: Summary
-
-- Show what was created
-- Test command to verify setup
+This updates the global installation without touching your project-specific agents or config.
 
 ---
 
@@ -98,6 +97,27 @@ An orchestrated workflow for Claude Code, designed for monorepos with multiple a
 
 ---
 
+## Dashboard
+
+The dashboard provides real-time visibility into agent activity across all projects:
+
+- **Real-time updates** via Server-Sent Events (SSE)
+- **Log streaming** as agents work
+- **Token tracking** for usage monitoring
+- **Multi-project view** - see agents from all projects
+
+Start the dashboard:
+
+```bash
+cd ~/.claude-orchestrator/dashboard && bun run start
+```
+
+Or it auto-starts when you use the orchestrator.
+
+Open: http://localhost:4000
+
+---
+
 ## MCP Orchestrator
 
 The orchestrator uses an MCP server that provides these tools:
@@ -105,7 +125,7 @@ The orchestrator uses an MCP server that provides these tools:
 | Tool | Purpose |
 | ---- | ------- |
 | `mcp__orchestrator__spawn_agent` | Launch a subagent with a specific task |
-| `mcp__orchestrator__get_agent_status` | Check status and read output of an agent. **Use `block=true` to wait for completion** |
+| `mcp__orchestrator__get_agent_status` | Check status and read output. **Use `block=true` to wait for completion** |
 | `mcp__orchestrator__list_agents` | List all available and spawned agents |
 | `mcp__orchestrator__kill_agent` | Terminate a running agent |
 | `mcp__orchestrator__read_agent_log` | Read the full log of an agent |
@@ -169,103 +189,94 @@ Tracks complex tasks across sessions. Leave and return anytime with `/continue-p
 
 ---
 
-## Manual Installation (Basic)
+## Project Structure
 
-> **Note**: This only copies the base template files. You'll need to customize agents manually. For automatic customization, use the [Quick Install](#quick-install-recommended) method above.
+After setup, your project will have:
+
+```
+your-project/
+├── .claude/
+│   ├── agents/           # Agent definitions (customized for YOUR project)
+│   │   ├── orchestrator.md
+│   │   └── [your-apps].md
+│   ├── commands/         # Slash commands
+│   │   ├── client-feedback.md
+│   │   ├── investigate.md
+│   │   └── ...
+│   ├── plans/            # PLAN files for tracking work
+│   └── logs/             # Local agent logs
+├── AGENTS.md             # Project-wide coding conventions
+└── .mcp.json             # MCP server config (points to global install)
+```
+
+Global installation:
+
+```
+~/.claude-orchestrator/
+├── mcp-orchestrator/     # MCP server (shared)
+├── dashboard/            # Web dashboard (shared)
+├── bin/update.sh         # Update script
+├── orchestrator.db       # SQLite database (all projects)
+└── logs/                 # Agent logs (organized by project)
+```
+
+---
+
+## Manual Setup
+
+If you prefer manual setup:
+
+### 1. Install globally
 
 ```bash
-# Clone and copy
-git clone https://github.com/LyricalString/claude-orchestrator-template.git /tmp/orc-template
-cp -r /tmp/orc-template/.claude ./
-cp -r /tmp/orc-template/mcp-orchestrator ./
-cp /tmp/orc-template/AGENTS.md ./
+git clone https://github.com/LyricalString/claude-orchestrator-template.git /tmp/orc
+bash /tmp/orc/install-global.sh
+rm -rf /tmp/orc
+```
 
-# Install MCP server dependencies
-cd mcp-orchestrator && bun install && cd ..
+### 2. Copy to project
+
+```bash
+cd your-project
+
+# Clone template
+git clone --depth 1 https://github.com/LyricalString/claude-orchestrator-template.git /tmp/orc-template
+
+# Copy commands and template agents
+mkdir -p .claude/agents .claude/commands .claude/plans .claude/logs
+cp -r /tmp/orc-template/.claude/commands/* .claude/commands/
+cp -r /tmp/orc-template/.claude/agents/* .claude/agents/
+cp /tmp/orc-template/AGENTS.md ./
 
 # Clean up
 rm -rf /tmp/orc-template
-
-# Add MCP server to your settings (see MCP Configuration below)
 ```
 
-Or use the install script:
+### 3. Configure MCP
 
-```bash
-curl -sSL https://raw.githubusercontent.com/LyricalString/claude-orchestrator-template/main/install.sh | bash
-```
-
-### MCP Configuration
-
-Add to your `~/.claude/claude_desktop_config.json`:
+Create `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "orchestrator": {
       "command": "bun",
-      "args": ["run", "/path/to/your/project/mcp-orchestrator/index.ts"],
+      "args": ["run", "~/.claude-orchestrator/mcp-orchestrator/index.ts"],
       "env": {
-        "PROJECT_ROOT": "/path/to/your/project"
+        "PROJECT_ROOT": "."
       }
     }
   }
 }
 ```
 
-### Customize for Your Project
+### 4. Customize agents
 
 ```bash
-# Generate agents for your apps (inside Claude Code)
+# Inside Claude Code
 /generate-agent apps/your-app
 
-# Update orchestrator routing table
-# Edit .claude/agents/orchestrator.md
-
-# Delete example agents you don't need
-rm .claude/agents/api.md       # if not needed
-rm .claude/agents/frontend.md  # if not needed
-rm .claude/agents/database.md  # if no database
-```
-
----
-
-## After Installation
-
-```bash
-# Restart Claude Code
-claude
-```
-
-Then send:
-
-```
-/investigate "overview of this project"
-```
-
----
-
-## Project Structure
-
-```
-your-project/
-├── .claude/
-│   ├── agents/           # Agent definitions
-│   │   ├── orchestrator.md
-│   │   ├── frontend.md
-│   │   ├── api.md
-│   │   └── database.md
-│   ├── commands/         # Slash commands
-│   │   ├── client-feedback.md
-│   │   ├── investigate.md
-│   │   ├── implement.md
-│   │   └── ...
-│   ├── plans/            # PLAN files for tracking work
-│   └── logs/             # Agent execution logs
-├── mcp-orchestrator/     # MCP server
-│   ├── index.ts
-│   └── package.json
-└── AGENTS.md             # Project-wide coding conventions
+# Or manually edit .claude/agents/
 ```
 
 ---
