@@ -55,14 +55,16 @@ Run these commands:
 git clone https://github.com/LyricalString/claude-orchestrator-template.git /tmp/orc-template
 cp -r /tmp/orc-template/.claude ./
 cp -r /tmp/orc-template/mcp-orchestrator ./
+cp -r /tmp/orc-template/dashboard ./
 ```
 
 **Note:** Do NOT copy AGENTS.md yet - we'll handle it in Phase 5.
 
-### Step 2.2: Install MCP Server Dependencies
+### Step 2.2: Install Dependencies
 
 ```bash
 cd mcp-orchestrator && bun install && cd ..
+cd dashboard && bun run install:all && bun run build && cd ..
 ```
 
 ### Step 2.3: Verify Copy
@@ -70,11 +72,24 @@ cd mcp-orchestrator && bun install && cd ..
 ```bash
 ls .claude/agents/ .claude/commands/
 ls mcp-orchestrator/
+ls dashboard/server/ dashboard/web/
 ```
 
 Confirm files exist before proceeding.
 
-### Step 2.4: Clean Up
+### Step 2.4: Dashboard Data Location
+
+The dashboard stores shared data at `~/.claude-orchestrator/`:
+- `orchestrator.db` - SQLite database (all projects share this)
+- `logs/` - Agent logs organized by project
+- `dashboard.pid` / `dashboard.port` - Runtime state
+
+The MCP server auto-starts the dashboard when needed. To start manually:
+```bash
+cd dashboard && bun run start
+```
+
+### Step 2.5: Clean Up
 
 ```bash
 rm -rf /tmp/orc-template
@@ -82,7 +97,7 @@ rm -rf /tmp/orc-template
 
 ---
 
-## Phase 2.5: Read Existing Documentation
+## Phase 2.6: Read Existing Documentation
 
 **USE ASYNC AGENT** - Launch a Task agent to read documentation without bloating main context.
 
@@ -110,7 +125,7 @@ Return a structured summary:
 Keep the summary concise - we'll use it to inform agent generation.
 ```
 
-### Step 2.5.2: Present Documentation Findings
+### Step 2.6.2: Present Documentation Findings
 
 After the agent returns, tell the user:
 

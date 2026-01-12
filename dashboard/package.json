@@ -1,0 +1,13 @@
+{
+  "name": "claude-orchestrator-dashboard",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "install:all": "cd server && bun install && cd ../web && bun install",
+    "build": "cd web && bun run build",
+    "dev": "bun run --cwd server dev",
+    "start": "bun run --cwd server start",
+    "dev:web": "cd web && bun run dev"
+  }
+}

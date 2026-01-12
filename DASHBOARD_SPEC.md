@@ -15,22 +15,23 @@ A centralized web dashboard to monitor Claude Code orchestrator agents across mu
 │  │  (Claude)    │  │  (Claude)    │  │  (Claude)    │          │
 │  │      │       │  │      │       │  │      │       │          │
 │  │  MCP Server  │  │  MCP Server  │  │  MCP Server  │          │
+│  │  dashboard/  │  │  dashboard/  │  │  dashboard/  │          │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
 │         │                 │                 │                   │
 │         └────────────────┬┴─────────────────┘                   │
 │                          │                                      │
 │                          ▼                                      │
 │         ┌─────────────────────────────────┐                    │
-│         │   ~/.claude-dashboard/          │                    │
+│         │   ~/.claude-orchestrator/       │                    │
 │         │   ├── orchestrator.db (SQLite)  │◄─── Single DB      │
 │         │   ├── logs/                     │     for all        │
-│         │   └── server/                   │     projects       │
+│         │   └── dashboard.pid/port        │     projects       │
 │         └─────────────────────────────────┘                    │
 │                          │                                      │
 │                          ▼                                      │
 │         ┌─────────────────────────────────┐                    │
 │         │   Dashboard Web Server          │                    │
-│         │   (Hono + React)                │                    │
+│         │   (from project's dashboard/)   │                    │
 │         │   http://localhost:4000         │                    │
 │         └─────────────────────────────────┘                    │
 │                                                                  │
@@ -50,7 +51,7 @@ A centralized web dashboard to monitor Claude Code orchestrator agents across mu
 | Log parsing | Plain text | No transformation, raw output |
 | Interaction | Read-only monitoring | No agent control from web UI |
 | Project identification | Directory basename | Automatic, no config needed |
-| Installation | Global (~/.claude-dashboard) | Single installation serves all projects |
+| Installation | Code in repo, data at ~/.claude-orchestrator | Distributed with template, shared data |
 | MCP-Dashboard comm | Shared SQLite | No networking, DB is sync point |
 | Resilience | Graceful degradation | MCP works without dashboard |
 | Dashboard startup | Auto-launch by first MCP | Self-managing, no manual start |
@@ -59,16 +60,15 @@ A centralized web dashboard to monitor Claude Code orchestrator agents across mu
 
 ## Components
 
-### 1. Central Dashboard Server
+### 1. Dashboard Server
 
-**Location**: `~/.claude-dashboard/`
+**Code Location**: `dashboard/` (in repo, distributed with template)
 
-**Structure**:
+**Code Structure**:
 ```
-~/.claude-dashboard/
+dashboard/
 ├── server/
 │   ├── index.ts          # Hono server entry
-│   ├── api/              # REST endpoints
 │   ├── db.ts             # SQLite connection & queries
 │   └── package.json
 ├── web/
@@ -83,10 +83,19 @@ A centralized web dashboard to monitor Claude Code orchestrator agents across mu
 │   │       └── usePolling.ts    # Polling logic
 │   ├── index.html
 │   └── package.json
+└── package.json          # Root scripts
+```
+
+**Data Location**: `~/.claude-orchestrator/` (shared across all projects)
+
+**Data Structure**:
+```
+~/.claude-orchestrator/
 ├── orchestrator.db       # Shared SQLite database
 ├── logs/                 # Centralized log storage
 │   └── {project}/{agent}_{timestamp}_{taskId}.log
-└── dashboard.pid         # PID file for process management
+├── dashboard.pid         # PID file for process management
+└── dashboard.port        # Port file for dynamic port allocation
 ```
 
 **Tech Stack**:
@@ -102,7 +111,7 @@ A centralized web dashboard to monitor Claude Code orchestrator agents across mu
 **Changes to `mcp-orchestrator/index.ts`**:
 
 1. **Import shared DB module**:
-   - Connect to `~/.claude-dashboard/orchestrator.db`
+   - Connect to `~/.claude-orchestrator/orchestrator.db`
    - Use `bun:sqlite` with WAL mode for concurrent access
 
 2. **Write events on agent lifecycle**:
@@ -295,7 +304,7 @@ function useAgentPolling(projectId?: number) {
 ```
 
 **Log Streaming**:
-- Chokidar watches `~/.claude-dashboard/logs/`
+- Chokidar watches `~/.claude-orchestrator/logs/`
 - On file change, server tracks file size
 - Client polls `/api/agents/:id/log?offset=N`
 - Append new content to log viewer
@@ -303,12 +312,10 @@ function useAgentPolling(projectId?: number) {
 
 ### 7. Installation & Setup
 
-**Dashboard Installation** (one-time):
+**Dashboard Installation** (per project, included with template):
 ```bash
-# Clone dashboard to global location
-git clone https://github.com/user/claude-dashboard ~/.claude-dashboard
-cd ~/.claude-dashboard
-bun install
+# Dashboard code is included in the repo at dashboard/
+cd dashboard && bun run install:all && bun run build && cd ..
 ```
 
 **MCP Server Configuration** (per project):
@@ -320,19 +327,24 @@ bun install
       "command": "bun",
       "args": ["run", "mcp-orchestrator/index.ts"],
       "env": {
-        "PROJECT_ROOT": ".",
-        "DASHBOARD_DB": "~/.claude-dashboard/orchestrator.db",
-        "DASHBOARD_LOGS": "~/.claude-dashboard/logs"
+        "PROJECT_ROOT": "."
       }
     }
   }
 }
 ```
 
+**Data Location**:
+- All data is stored at `~/.claude-orchestrator/` (created automatically)
+- This location is shared across all projects using the orchestrator
+- The MCP server auto-starts the dashboard from `PROJECT_ROOT/dashboard/server/`
+
 **Auto-start Logic** (in MCP server):
 ```typescript
 async function ensureDashboardRunning() {
-  const pidFile = path.join(DASHBOARD_PATH, 'dashboard.pid');
+  const DATA_DIR = path.join(homedir(), '.claude-orchestrator');
+  const pidFile = path.join(DATA_DIR, 'dashboard.pid');
+  const DASHBOARD_SERVER_DIR = path.join(PROJECT_ROOT, 'dashboard', 'server');
 
   try {
     if (existsSync(pidFile)) {
@@ -345,15 +357,13 @@ async function ensureDashboardRunning() {
     // PID invalid or process dead
   }
 
-  // Launch dashboard
-  const dashboard = spawn('bun', ['run', 'server/index.ts'], {
-    cwd: DASHBOARD_PATH,
+  // Launch dashboard from repo
+  const dashboard = spawn('bun', ['run', 'index.ts'], {
+    cwd: DASHBOARD_SERVER_DIR,
     detached: true,
     stdio: 'ignore'
   });
   dashboard.unref();
-
-  writeFileSync(pidFile, String(dashboard.pid));
 }
 ```
 
@@ -404,14 +414,12 @@ function cleanupOldData() {
 
 ## File Changes Required
 
-### New Files
+### Dashboard Files (in repo)
 ```
-~/.claude-dashboard/
+dashboard/
 ├── server/
 │   ├── index.ts
 │   ├── db.ts
-│   ├── routes/agents.ts
-│   ├── routes/projects.ts
 │   └── package.json
 ├── web/
 │   ├── src/
@@ -422,7 +430,7 @@ function cleanupOldData() {
 │   ├── index.html
 │   ├── vite.config.ts
 │   └── package.json
-└── install.sh
+└── package.json
 ```
 
 ### Modified Files
@@ -433,25 +441,22 @@ mcp-orchestrator/index.ts
 ├── Modify: spawn_agent to INSERT to DB
 ├── Modify: status checking to UPDATE DB
 └── Add: graceful degradation try/catch
-
-mcp-orchestrator/package.json
-└── Add: chokidar dependency (if needed)
 ```
 
 ## Development Commands
 
 ```bash
-# Install dashboard globally
-~/.claude-dashboard/install.sh
+# Install dashboard dependencies
+cd dashboard && bun run install:all && bun run build && cd ..
 
 # Start dashboard manually (for development)
-cd ~/.claude-dashboard && bun run dev
+cd dashboard && bun run dev
 
 # View dashboard
 open http://localhost:4000
 
 # Check if dashboard running
-cat ~/.claude-dashboard/dashboard.pid && ps aux | grep "dashboard"
+cat ~/.claude-orchestrator/dashboard.pid && ps aux | grep "dashboard"
 ```
 
 ## Security Considerations

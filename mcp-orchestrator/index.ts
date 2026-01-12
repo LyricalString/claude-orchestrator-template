@@ -4,7 +4,7 @@
  *
  * Enables Claude Code to spawn and monitor subagents using `claude -p`
  * Agents run as independent processes and write to log files.
- * Integrates with the central dashboard at ~/.claude-dashboard
+ * Integrates with the dashboard (code in repo, data at ~/.claude-orchestrator)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -23,16 +23,18 @@ const PROJECT_NAME = path.basename(PROJECT_ROOT);
 const AGENTS_DIR = path.join(PROJECT_ROOT, ".claude", "agents");
 const LOCAL_LOGS_DIR = path.join(PROJECT_ROOT, ".claude", "logs");
 
-// Dashboard paths
-const DASHBOARD_DIR = path.join(homedir(), ".claude-dashboard");
-const DASHBOARD_DB_PATH = path.join(DASHBOARD_DIR, "orchestrator.db");
-const DASHBOARD_LOGS_DIR = path.join(DASHBOARD_DIR, "logs", PROJECT_NAME);
-const DASHBOARD_PID_FILE = path.join(DASHBOARD_DIR, "dashboard.pid");
-const DASHBOARD_PORT_FILE = path.join(DASHBOARD_DIR, "dashboard.port");
-const DASHBOARD_SERVER_DIR = path.join(DASHBOARD_DIR, "server");
+// Data directory (shared across all projects using the orchestrator)
+const DATA_DIR = path.join(homedir(), ".claude-orchestrator");
+const DASHBOARD_DB_PATH = path.join(DATA_DIR, "orchestrator.db");
+const DASHBOARD_LOGS_DIR = path.join(DATA_DIR, "logs", PROJECT_NAME);
+const DASHBOARD_PID_FILE = path.join(DATA_DIR, "dashboard.pid");
+const DASHBOARD_PORT_FILE = path.join(DATA_DIR, "dashboard.port");
 
-// Use dashboard logs if available, otherwise local
-const LOGS_DIR = fs.existsSync(DASHBOARD_DIR) ? DASHBOARD_LOGS_DIR : LOCAL_LOGS_DIR;
+// Dashboard server (in the repo)
+const DASHBOARD_SERVER_DIR = path.join(PROJECT_ROOT, "dashboard", "server");
+
+// Use data directory for logs (shared), fallback to local
+const LOGS_DIR = DASHBOARD_LOGS_DIR;
 
 // Ensure directories exist
 if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
@@ -68,9 +70,9 @@ let projectId: number | null = null;
  * Initialize dashboard database connection (graceful degradation)
  */
 function initDashboardDB(): boolean {
-  if (!fs.existsSync(DASHBOARD_DIR)) {
-    console.error("[Dashboard] Dashboard not installed at ~/.claude-dashboard");
-    return false;
+  // Ensure data directory exists
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
   }
 
   try {
@@ -203,13 +205,9 @@ function getDashboardPort(): number | null {
  * Start the dashboard server if not running
  */
 function ensureDashboardRunning(): void {
-  if (!fs.existsSync(DASHBOARD_DIR)) {
-    console.error("[Dashboard] Dashboard not installed, skipping auto-start");
-    return;
-  }
-
   if (!fs.existsSync(DASHBOARD_SERVER_DIR)) {
     console.error("[Dashboard] Dashboard server not found at", DASHBOARD_SERVER_DIR);
+    console.error("[Dashboard] Run 'cd dashboard && bun install' to install dependencies");
     return;
   }
 
