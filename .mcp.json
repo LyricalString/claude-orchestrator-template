@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "orchestrator": {
+      "command": "bun",
+      "args": ["run", "mcp-orchestrator/index.ts"],
+      "env": {
+        "PROJECT_ROOT": "."
+      }
+    }
+  }
+}

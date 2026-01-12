@@ -1,0 +1,6 @@
+{
+  "enabledMcpjsonServers": [
+    "trilo"
+  ],
+  "enableAllProjectMcpServers": true
+}
