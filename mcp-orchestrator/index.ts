@@ -4,6 +4,7 @@
  *
  * Enables Claude Code to spawn and monitor subagents using `claude -p`
  * Agents run as independent processes and write to log files.
+ * Integrates with the central dashboard at ~/.claude-dashboard
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -13,14 +14,29 @@ import { spawn } from "child_process";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import { homedir } from "os";
+import { Database } from "bun:sqlite";
 
 // Project root directory (parent of mcp-orchestrator)
 const PROJECT_ROOT = path.resolve(import.meta.dir, "..");
+const PROJECT_NAME = path.basename(PROJECT_ROOT);
 const AGENTS_DIR = path.join(PROJECT_ROOT, ".claude", "agents");
-const LOGS_DIR = path.join(PROJECT_ROOT, ".claude", "logs");
+const LOCAL_LOGS_DIR = path.join(PROJECT_ROOT, ".claude", "logs");
+
+// Dashboard paths
+const DASHBOARD_DIR = path.join(homedir(), ".claude-dashboard");
+const DASHBOARD_DB_PATH = path.join(DASHBOARD_DIR, "orchestrator.db");
+const DASHBOARD_LOGS_DIR = path.join(DASHBOARD_DIR, "logs", PROJECT_NAME);
+const DASHBOARD_PID_FILE = path.join(DASHBOARD_DIR, "dashboard.pid");
+const DASHBOARD_PORT_FILE = path.join(DASHBOARD_DIR, "dashboard.port");
+const DASHBOARD_SERVER_DIR = path.join(DASHBOARD_DIR, "server");
+
+// Use dashboard logs if available, otherwise local
+const LOGS_DIR = fs.existsSync(DASHBOARD_DIR) ? DASHBOARD_LOGS_DIR : LOCAL_LOGS_DIR;
 
 // Ensure directories exist
 if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
+if (!fs.existsSync(LOCAL_LOGS_DIR)) fs.mkdirSync(LOCAL_LOGS_DIR, { recursive: true });
 
 // Types
 interface AgentTask {
@@ -36,12 +52,198 @@ interface AgentTask {
   exitCode: number | null;
 }
 
-// Global state of agents
+// Global state of agents (in-memory for this session)
 const runningAgents: Map<string, AgentTask> = new Map();
 
 // Allowed tools by mode
 const INVESTIGATE_TOOLS = "Read,Glob,Grep,LS,WebFetch,WebSearch";
 const IMPLEMENT_TOOLS = "Read,Glob,Grep,LS,Edit,Write,Bash,WebFetch,WebSearch";
+
+// ============ Dashboard Integration ============
+
+let db: Database | null = null;
+let projectId: number | null = null;
+
+/**
+ * Initialize dashboard database connection (graceful degradation)
+ */
+function initDashboardDB(): boolean {
+  if (!fs.existsSync(DASHBOARD_DIR)) {
+    console.error("[Dashboard] Dashboard not installed at ~/.claude-dashboard");
+    return false;
+  }
+
+  try {
+    db = new Database(DASHBOARD_DB_PATH);
+    db.run("PRAGMA journal_mode = WAL");
+
+    // Ensure schema exists (in case dashboard server hasn't run yet)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        path TEXT NOT NULL,
+        first_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_activity_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    db.run(`
+      CREATE TABLE IF NOT EXISTS agents (
+        id TEXT PRIMARY KEY,
+        project_id INTEGER NOT NULL,
+        agent_name TEXT NOT NULL,
+        task TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        pid INTEGER,
+        log_file TEXT NOT NULL,
+        started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        completed_at DATETIME,
+        exit_code INTEGER,
+        FOREIGN KEY (project_id) REFERENCES projects(id)
+      )
+    `);
+
+    db.run(`CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project_id)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_agents_started ON agents(started_at DESC)`);
+
+    // Get or create project
+    const existing = db.query<{ id: number }, [string]>(
+      "SELECT id FROM projects WHERE name = ?"
+    ).get(PROJECT_NAME);
+
+    if (existing) {
+      projectId = existing.id;
+      db.run(
+        "UPDATE projects SET last_activity_at = CURRENT_TIMESTAMP, path = ? WHERE id = ?",
+        [PROJECT_ROOT, existing.id]
+      );
+    } else {
+      const result = db.run(
+        "INSERT INTO projects (name, path) VALUES (?, ?)",
+        [PROJECT_NAME, PROJECT_ROOT]
+      );
+      projectId = Number(result.lastInsertRowid);
+    }
+
+    console.error(`[Dashboard] Connected to dashboard DB, project: ${PROJECT_NAME} (id: ${projectId})`);
+    return true;
+  } catch (err) {
+    console.error("[Dashboard] Failed to connect to dashboard DB:", err);
+    db = null;
+    return false;
+  }
+}
+
+/**
+ * Write agent to dashboard database
+ */
+function dbInsertAgent(agent: AgentTask): void {
+  if (!db || !projectId) return;
+
+  try {
+    db.run(`
+      INSERT INTO agents (id, project_id, agent_name, task, mode, pid, log_file, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'running')
+    `, [agent.id, projectId, agent.agentName, agent.task, agent.mode, agent.pid, agent.logFile]);
+
+    db.run("UPDATE projects SET last_activity_at = CURRENT_TIMESTAMP WHERE id = ?", [projectId]);
+  } catch (err) {
+    console.error("[Dashboard] Failed to insert agent:", err);
+  }
+}
+
+/**
+ * Update agent status in dashboard database
+ */
+function dbUpdateAgentStatus(id: string, status: string, exitCode: number | null): void {
+  if (!db) return;
+
+  try {
+    db.run(`
+      UPDATE agents
+      SET status = ?, exit_code = ?, completed_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [status, exitCode, id]);
+  } catch (err) {
+    console.error("[Dashboard] Failed to update agent status:", err);
+  }
+}
+
+/**
+ * Check if dashboard server is running
+ */
+function isDashboardRunning(): boolean {
+  if (!fs.existsSync(DASHBOARD_PID_FILE)) return false;
+
+  try {
+    const pid = parseInt(fs.readFileSync(DASHBOARD_PID_FILE, "utf-8").trim());
+    process.kill(pid, 0); // Check if process exists
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get the dashboard port from the port file
+ */
+function getDashboardPort(): number | null {
+  if (!fs.existsSync(DASHBOARD_PORT_FILE)) return null;
+  try {
+    return parseInt(fs.readFileSync(DASHBOARD_PORT_FILE, "utf-8").trim());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Start the dashboard server if not running
+ */
+function ensureDashboardRunning(): void {
+  if (!fs.existsSync(DASHBOARD_DIR)) {
+    console.error("[Dashboard] Dashboard not installed, skipping auto-start");
+    return;
+  }
+
+  if (!fs.existsSync(DASHBOARD_SERVER_DIR)) {
+    console.error("[Dashboard] Dashboard server not found at", DASHBOARD_SERVER_DIR);
+    return;
+  }
+
+  if (isDashboardRunning()) {
+    const port = getDashboardPort();
+    console.error(`[Dashboard] Dashboard already running on http://localhost:${port || "?"}`);
+    return;
+  }
+
+  try {
+    console.error("[Dashboard] Starting dashboard server...");
+
+    const proc = spawn("bun", ["run", "index.ts"], {
+      cwd: DASHBOARD_SERVER_DIR,
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env }
+    });
+
+    proc.unref();
+
+    // Wait a bit for the port file to be written
+    setTimeout(() => {
+      const port = getDashboardPort();
+      if (port) {
+        console.error(`[Dashboard] Dashboard started on http://localhost:${port}`);
+      }
+    }, 1000);
+  } catch (err) {
+    console.error("[Dashboard] Failed to start dashboard:", err);
+  }
+}
+
+// ============ Agent Logic ============
 
 /**
  * Read an agent prompt from .claude/agents/
@@ -163,6 +365,9 @@ Started: ${new Date().toISOString()}
     exitCode: null
   };
 
+  // Insert into dashboard DB
+  dbInsertAgent(agentTask);
+
   // Monitor when finished
   proc.on("exit", (code) => {
     const task = runningAgents.get(taskId);
@@ -170,6 +375,9 @@ Started: ${new Date().toISOString()}
       task.status = code === 0 ? "completed" : "failed";
       task.completedAt = new Date();
       task.exitCode = code;
+
+      // Update dashboard DB
+      dbUpdateAgentStatus(taskId, task.status, code);
 
       // Add log footer
       fs.appendFileSync(logFile, `\n---
@@ -185,6 +393,9 @@ Exit Code: ${code}
     if (task) {
       task.status = "failed";
       task.completedAt = new Date();
+
+      // Update dashboard DB
+      dbUpdateAgentStatus(taskId, "failed", null);
     }
     fs.appendFileSync(logFile, `\n---
 Error: ${err.message}
@@ -212,6 +423,10 @@ function isAgentRunning(task: AgentTask): boolean {
     // Process no longer exists
     task.status = "completed";
     task.completedAt = new Date();
+
+    // Update dashboard DB
+    dbUpdateAgentStatus(task.id, "completed", 0);
+
     return false;
   }
 }
@@ -296,6 +511,10 @@ function killAgent(taskId: string): { success: boolean; error?: string } {
     process.kill(task.pid, "SIGTERM");
     task.status = "failed";
     task.completedAt = new Date();
+
+    // Update dashboard DB
+    dbUpdateAgentStatus(taskId, "failed", -1);
+
     return { success: true };
   } catch (err: any) {
     return { success: false, error: err.message };
@@ -452,9 +671,15 @@ server.tool(
 
 // Start the server
 async function main() {
+  // Initialize dashboard integration
+  initDashboardDB();
+
+  // Auto-start dashboard if not running
+  ensureDashboardRunning();
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("MCP Orchestrator Server running on stdio");
+  console.error(`MCP Orchestrator Server running on stdio (project: ${PROJECT_NAME})`);
 }
 
 main().catch(console.error);
