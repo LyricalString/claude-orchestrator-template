@@ -29,9 +29,21 @@ db.run(`
 `);
 
 db.run(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    project_id INTEGER NOT NULL,
+    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    ended_at DATETIME,
+    status TEXT NOT NULL DEFAULT 'active',
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+  )
+`);
+
+db.run(`
   CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
     project_id INTEGER NOT NULL,
+    session_id TEXT,
     agent_name TEXT NOT NULL,
     task TEXT NOT NULL,
     mode TEXT NOT NULL,
@@ -43,11 +55,12 @@ db.run(`
     exit_code INTEGER,
     input_tokens INTEGER DEFAULT 0,
     output_tokens INTEGER DEFAULT 0,
-    FOREIGN KEY (project_id) REFERENCES projects(id)
+    FOREIGN KEY (project_id) REFERENCES projects(id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
   )
 `);
 
-// Add token columns to existing tables (migration for existing DBs)
+// Migrations for existing DBs
 try {
   db.run(`ALTER TABLE agents ADD COLUMN input_tokens INTEGER DEFAULT 0`);
 } catch {
@@ -58,11 +71,19 @@ try {
 } catch {
   // Column already exists
 }
+try {
+  db.run(`ALTER TABLE agents ADD COLUMN session_id TEXT`);
+} catch {
+  // Column already exists
+}
 
 // Create indexes
 db.run(`CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project_id)`);
 db.run(`CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status)`);
 db.run(`CREATE INDEX IF NOT EXISTS idx_agents_started ON agents(started_at DESC)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC)`);
 
 // Helper functions
 export function getOrCreateProject(name: string, path: string): number {
@@ -98,6 +119,7 @@ export interface Agent {
   id: string;
   project_id: number;
   project_name?: string;
+  session_id: string | null;
   agent_name: string;
   task: string;
   mode: string;
@@ -109,6 +131,17 @@ export interface Agent {
   exit_code: number | null;
   input_tokens: number;
   output_tokens: number;
+}
+
+export interface Session {
+  id: string;
+  project_id: number;
+  project_name?: string;
+  started_at: string;
+  ended_at: string | null;
+  status: string;
+  agent_count?: number;
+  running_count?: number;
 }
 
 export function getAllProjects(): Project[] {
@@ -157,6 +190,7 @@ export function getAgent(id: string): Agent | null {
 export function insertAgent(agent: {
   id: string;
   project_id: number;
+  session_id?: string | null;
   agent_name: string;
   task: string;
   mode: string;
@@ -164,12 +198,73 @@ export function insertAgent(agent: {
   log_file: string;
 }): void {
   db.run(`
-    INSERT INTO agents (id, project_id, agent_name, task, mode, pid, log_file, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'running')
-  `, [agent.id, agent.project_id, agent.agent_name, agent.task, agent.mode, agent.pid, agent.log_file]);
+    INSERT INTO agents (id, project_id, session_id, agent_name, task, mode, pid, log_file, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running')
+  `, [agent.id, agent.project_id, agent.session_id || null, agent.agent_name, agent.task, agent.mode, agent.pid, agent.log_file]);
 
   // Update project last_activity_at
   db.run("UPDATE projects SET last_activity_at = CURRENT_TIMESTAMP WHERE id = ?", [agent.project_id]);
+}
+
+// Session functions
+export function createSession(id: string, projectId: number): void {
+  db.run(`
+    INSERT INTO sessions (id, project_id, status)
+    VALUES (?, ?, 'active')
+  `, [id, projectId]);
+
+  db.run("UPDATE projects SET last_activity_at = CURRENT_TIMESTAMP WHERE id = ?", [projectId]);
+}
+
+export function endSession(id: string): void {
+  db.run(`
+    UPDATE sessions
+    SET status = 'ended', ended_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `, [id]);
+}
+
+export function getSession(id: string): Session | null {
+  return db.query<Session, [string]>(`
+    SELECT s.*, p.name as project_name,
+      (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.id) as agent_count,
+      (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.id AND a.status = 'running') as running_count
+    FROM sessions s
+    JOIN projects p ON s.project_id = p.id
+    WHERE s.id = ?
+  `).get(id);
+}
+
+export function getSessions(projectId?: number, limit: number = 50): Session[] {
+  let query = `
+    SELECT s.*, p.name as project_name,
+      (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.id) as agent_count,
+      (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.id AND a.status = 'running') as running_count
+    FROM sessions s
+    JOIN projects p ON s.project_id = p.id
+    WHERE 1=1
+  `;
+  const params: (string | number)[] = [];
+
+  if (projectId) {
+    query += " AND s.project_id = ?";
+    params.push(projectId);
+  }
+
+  query += " ORDER BY s.started_at DESC LIMIT ?";
+  params.push(limit);
+
+  return db.query<Session, (string | number)[]>(query).all(...params);
+}
+
+export function getSessionAgents(sessionId: string): Agent[] {
+  return db.query<Agent, [string]>(`
+    SELECT a.*, p.name as project_name
+    FROM agents a
+    JOIN projects p ON a.project_id = p.id
+    WHERE a.session_id = ?
+    ORDER BY a.started_at ASC
+  `).all(sessionId);
 }
 
 export function updateAgentStatus(id: string, status: string, exitCode: number | null): void {

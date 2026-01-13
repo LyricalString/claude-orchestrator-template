@@ -65,6 +65,7 @@ const IMPLEMENT_TOOLS = "Read,Glob,Grep,LS,Edit,Write,Bash,WebFetch,WebSearch";
 
 let db: Database | null = null;
 let projectId: number | null = null;
+let sessionId: string | null = null;
 
 /**
  * Initialize dashboard database connection (graceful degradation)
@@ -91,9 +92,21 @@ function initDashboardDB(): boolean {
     `);
 
     db.run(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        project_id INTEGER NOT NULL,
+        started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        ended_at DATETIME,
+        status TEXT NOT NULL DEFAULT 'active',
+        FOREIGN KEY (project_id) REFERENCES projects(id)
+      )
+    `);
+
+    db.run(`
       CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY,
         project_id INTEGER NOT NULL,
+        session_id TEXT,
         agent_name TEXT NOT NULL,
         task TEXT NOT NULL,
         mode TEXT NOT NULL,
@@ -103,13 +116,23 @@ function initDashboardDB(): boolean {
         started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         completed_at DATETIME,
         exit_code INTEGER,
-        FOREIGN KEY (project_id) REFERENCES projects(id)
+        FOREIGN KEY (project_id) REFERENCES projects(id),
+        FOREIGN KEY (session_id) REFERENCES sessions(id)
       )
     `);
+
+    // Migration for existing DBs
+    try {
+      db.run(`ALTER TABLE agents ADD COLUMN session_id TEXT`);
+    } catch {
+      // Column already exists
+    }
 
     db.run(`CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project_id)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_agents_started ON agents(started_at DESC)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id)`);
 
     // Get or create project
     const existing = db.query<{ id: number }, [string]>(
@@ -130,7 +153,14 @@ function initDashboardDB(): boolean {
       projectId = Number(result.lastInsertRowid);
     }
 
-    console.error(`[Dashboard] Connected to dashboard DB, project: ${PROJECT_NAME} (id: ${projectId})`);
+    // Create a new session for this orchestrator instance
+    sessionId = randomUUID().slice(0, 8);
+    db.run(
+      "INSERT INTO sessions (id, project_id, status) VALUES (?, ?, 'active')",
+      [sessionId, projectId]
+    );
+
+    console.error(`[Dashboard] Connected to dashboard DB, project: ${PROJECT_NAME} (id: ${projectId}), session: ${sessionId}`);
     return true;
   } catch (err) {
     console.error("[Dashboard] Failed to connect to dashboard DB:", err);
@@ -147,13 +177,30 @@ function dbInsertAgent(agent: AgentTask): void {
 
   try {
     db.run(`
-      INSERT INTO agents (id, project_id, agent_name, task, mode, pid, log_file, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'running')
-    `, [agent.id, projectId, agent.agentName, agent.task, agent.mode, agent.pid, agent.logFile]);
+      INSERT INTO agents (id, project_id, session_id, agent_name, task, mode, pid, log_file, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running')
+    `, [agent.id, projectId, sessionId, agent.agentName, agent.task, agent.mode, agent.pid, agent.logFile]);
 
     db.run("UPDATE projects SET last_activity_at = CURRENT_TIMESTAMP WHERE id = ?", [projectId]);
   } catch (err) {
     console.error("[Dashboard] Failed to insert agent:", err);
+  }
+}
+
+/**
+ * End the current session
+ */
+function dbEndSession(): void {
+  if (!db || !sessionId) return;
+
+  try {
+    db.run(`
+      UPDATE sessions
+      SET status = 'ended', ended_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [sessionId]);
+  } catch (err) {
+    console.error("[Dashboard] Failed to end session:", err);
   }
 }
 
@@ -724,6 +771,23 @@ server.tool(
   }
 );
 
+// Cleanup on exit
+function cleanup() {
+  dbEndSession();
+}
+
+process.on("SIGINT", () => {
+  cleanup();
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  cleanup();
+  process.exit(0);
+});
+
+process.on("exit", cleanup);
+
 // Start the server
 async function main() {
   // Initialize dashboard integration
@@ -734,7 +798,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`MCP Orchestrator Server running on stdio (project: ${PROJECT_NAME})`);
+  console.error(`MCP Orchestrator Server running on stdio (project: ${PROJECT_NAME}, session: ${sessionId})`);
 }
 
 main().catch(console.error);

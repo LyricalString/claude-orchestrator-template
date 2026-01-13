@@ -11,6 +11,9 @@ import {
   getAgent,
   getStats,
   cleanupOldData,
+  getSessions,
+  getSession,
+  getSessionAgents,
   DATA_DIR,
 } from "./db";
 
@@ -243,6 +246,58 @@ app.get("/api/agents/:id/log", async (c) => {
 app.get("/api/stats", (c) => {
   const stats = getStats();
   return c.json(stats);
+});
+
+// Sessions endpoints
+app.get("/api/sessions", (c) => {
+  const projectId = c.req.query("project_id");
+  const limit = parseInt(c.req.query("limit") || "50");
+
+  const sessions = getSessions(
+    projectId ? parseInt(projectId) : undefined,
+    limit
+  );
+
+  // Calculate duration for each session
+  const sessionsWithDuration = sessions.map((session) => ({
+    ...session,
+    duration: session.ended_at
+      ? new Date(session.ended_at).getTime() - new Date(session.started_at).getTime()
+      : Date.now() - new Date(session.started_at).getTime(),
+  }));
+
+  return c.json(sessionsWithDuration);
+});
+
+app.get("/api/sessions/:id", (c) => {
+  const id = c.req.param("id");
+  const session = getSession(id);
+
+  if (!session) {
+    return c.json({ error: "Session not found" }, 404);
+  }
+
+  return c.json({
+    ...session,
+    duration: session.ended_at
+      ? new Date(session.ended_at).getTime() - new Date(session.started_at).getTime()
+      : Date.now() - new Date(session.started_at).getTime(),
+  });
+});
+
+app.get("/api/sessions/:id/agents", (c) => {
+  const id = c.req.param("id");
+  const agents = getSessionAgents(id);
+
+  // Calculate duration for each agent
+  const agentsWithDuration = agents.map((agent) => ({
+    ...agent,
+    duration: agent.completed_at
+      ? new Date(agent.completed_at).getTime() - new Date(agent.started_at).getTime()
+      : Date.now() - new Date(agent.started_at).getTime(),
+  }));
+
+  return c.json(agentsWithDuration);
 });
 
 // Health check

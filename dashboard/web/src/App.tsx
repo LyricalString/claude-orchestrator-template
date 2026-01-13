@@ -1,18 +1,19 @@
 import { useState } from "react";
 import { Sidebar } from "./components/Sidebar";
-import { AgentList } from "./components/AgentList";
+import { SessionList } from "./components/SessionList";
 import { LogViewer } from "./components/LogViewer";
 import { UpdateBanner } from "./components/UpdateBanner";
-import { useProjects, useStats, useVersion } from "./hooks/usePolling";
-import { useAgentsSSE, useLogSSE } from "./hooks/useSSE";
+import { useProjects, useStats, useVersion, useSessions, useAgents } from "./hooks/usePolling";
+import { useLogSSE } from "./hooks/useSSE";
 import type { Agent } from "./types";
 
 function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
-  const { projects, loading: projectsLoading } = useProjects();
-  const { agents, connected } = useAgentsSSE(selectedProjectId ?? undefined);
+  const { projects } = useProjects();
+  const { sessions, loading: sessionsLoading } = useSessions(selectedProjectId ?? undefined);
+  const { agents } = useAgents(selectedProjectId ?? undefined);
   const stats = useStats();
   const log = useLogSSE(selectedAgentId);
   const { version, dismissed, dismiss } = useVersion();
@@ -52,9 +53,9 @@ function App() {
         />
 
         <div className="content">
-          <AgentList
-            agents={agents}
-            loading={!connected}
+          <SessionList
+            sessions={sessions}
+            loading={sessionsLoading}
             selectedAgentId={selectedAgentId}
             showProject={selectedProjectId === null}
             onSelectAgent={setSelectedAgentId}

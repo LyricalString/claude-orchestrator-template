@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import type { Project, Agent, Stats, LogResponse, VersionInfo } from "../types";
+import type { Project, Agent, Stats, LogResponse, VersionInfo, Session } from "../types";
 
 const POLL_INTERVAL = 2000;
 
@@ -57,7 +57,7 @@ export function useAgents(projectId?: number) {
 }
 
 export function useStats() {
-  const [stats, setStats] = useState<Stats>({ running: 0, completed: 0, failed: 0 });
+  const [stats, setStats] = useState<Stats>({ running: 0, completed: 0, failed: 0, total_input_tokens: 0, total_output_tokens: 0 });
 
   useEffect(() => {
     const poll = async () => {
@@ -138,4 +138,63 @@ export function useVersion() {
   const dismiss = () => setDismissed(true);
 
   return { version, dismissed, dismiss };
+}
+
+export function useSessions(projectId?: number) {
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const url = projectId
+          ? `/api/sessions?project_id=${projectId}`
+          : "/api/sessions";
+        const res = await fetch(url);
+        const data = await res.json();
+        setSessions(data);
+      } catch (err) {
+        console.error("Failed to fetch sessions:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    poll();
+    const interval = setInterval(poll, POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [projectId]);
+
+  return { sessions, loading };
+}
+
+export function useSessionAgents(sessionId: string | null) {
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!sessionId) {
+      setAgents([]);
+      return;
+    }
+
+    setLoading(true);
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/agents`);
+        const data = await res.json();
+        setAgents(data);
+      } catch (err) {
+        console.error("Failed to fetch session agents:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    poll();
+    const interval = setInterval(poll, POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [sessionId]);
+
+  return { agents, loading };
 }

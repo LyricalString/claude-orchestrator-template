@@ -46,3 +46,15 @@ export interface VersionInfo {
   updateUrl: string | null;
   updateCommand: string;
 }
+
+export interface Session {
+  id: string;
+  project_id: number;
+  project_name: string;
+  started_at: string;
+  ended_at: string | null;
+  status: string;
+  agent_count: number;
+  running_count: number;
+  duration: number;
+}
