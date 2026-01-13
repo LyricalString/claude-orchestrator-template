@@ -17,21 +17,24 @@ import * as path from "path";
 import { homedir } from "os";
 import { Database } from "bun:sqlite";
 
-// Project root directory (parent of mcp-orchestrator)
-const PROJECT_ROOT = path.resolve(import.meta.dir, "..");
+// Installation directory (where orchestrator is installed globally)
+const INSTALL_DIR = path.join(homedir(), ".claude-orchestrator");
+
+// Project root directory (current working directory where Claude Code is running)
+const PROJECT_ROOT = process.cwd();
 const PROJECT_NAME = path.basename(PROJECT_ROOT);
 const AGENTS_DIR = path.join(PROJECT_ROOT, ".claude", "agents");
 const LOCAL_LOGS_DIR = path.join(PROJECT_ROOT, ".claude", "logs");
 
 // Data directory (shared across all projects using the orchestrator)
-const DATA_DIR = path.join(homedir(), ".claude-orchestrator");
+const DATA_DIR = INSTALL_DIR;
 const DASHBOARD_DB_PATH = path.join(DATA_DIR, "orchestrator.db");
 const DASHBOARD_LOGS_DIR = path.join(DATA_DIR, "logs", PROJECT_NAME);
 const DASHBOARD_PID_FILE = path.join(DATA_DIR, "dashboard.pid");
 const DASHBOARD_PORT_FILE = path.join(DATA_DIR, "dashboard.port");
 
-// Dashboard server (in the repo)
-const DASHBOARD_SERVER_DIR = path.join(PROJECT_ROOT, "dashboard", "server");
+// Dashboard server (in the installation directory)
+const DASHBOARD_SERVER_DIR = path.join(INSTALL_DIR, "dashboard", "server");
 
 // Use data directory for logs (shared), fallback to local
 const LOGS_DIR = DASHBOARD_LOGS_DIR;
