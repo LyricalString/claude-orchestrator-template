@@ -751,11 +751,14 @@ server.tool(
 // Tool: read_agent_log
 server.tool(
   "read_agent_log",
-  "Read the full log file of an agent task.",
+  "Read the log file of an agent task. Supports pagination and tail mode to avoid loading full logs.",
   {
-    taskId: z.string().describe("The task ID to read logs for")
+    taskId: z.string().describe("The task ID to read logs for"),
+    offset: z.number().optional().describe("Line number to start reading from (0-indexed). Ignored if tail is true."),
+    limit: z.number().optional().describe("Maximum number of lines to return. Defaults to all lines."),
+    tail: z.boolean().optional().describe("If true, read from the end of the file instead of the beginning.")
   },
-  async ({ taskId }) => {
+  async ({ taskId, offset, limit, tail }) => {
     const task = runningAgents.get(taskId);
     if (!task) {
       return {
@@ -763,13 +766,124 @@ server.tool(
       };
     }
 
-    let output = "";
-    if (fs.existsSync(task.logFile)) {
-      output = fs.readFileSync(task.logFile, "utf-8");
+    if (!fs.existsSync(task.logFile)) {
+      return {
+        content: [{ type: "text", text: "(no output yet)" }]
+      };
     }
 
+    const fullContent = fs.readFileSync(task.logFile, "utf-8");
+    const lines = fullContent.split("\n");
+    const totalLines = lines.length;
+
+    let resultLines: string[];
+
+    if (tail && limit) {
+      // Read last N lines
+      resultLines = lines.slice(-limit);
+    } else if (offset !== undefined || limit !== undefined) {
+      // Pagination mode
+      const startLine = offset ?? 0;
+      const endLine = limit ? startLine + limit : undefined;
+      resultLines = lines.slice(startLine, endLine);
+    } else {
+      // Return all lines (backward compatible)
+      resultLines = lines;
+    }
+
+    const output = resultLines.join("\n");
+    const metadata = {
+      totalLines,
+      returnedLines: resultLines.length,
+      ...(offset !== undefined && { offset }),
+      ...(limit !== undefined && { limit }),
+      ...(tail && { tail: true })
+    };
+
     return {
-      content: [{ type: "text", text: output || "(no output yet)" }]
+      content: [{
+        type: "text",
+        text: `--- Log metadata: ${JSON.stringify(metadata)} ---\n${output || "(empty)"}`
+      }]
+    };
+  }
+);
+
+// Tool: search_agent_logs
+server.tool(
+  "search_agent_logs",
+  "Search for a pattern in agent logs. Returns matching lines with optional context. More efficient than reading full logs when looking for specific information.",
+  {
+    taskId: z.string().describe("The task ID to search logs for"),
+    pattern: z.string().describe("Regex pattern to search for in the logs"),
+    contextLines: z.number().optional().describe("Number of lines to include before and after each match (default: 0)"),
+    maxMatches: z.number().optional().describe("Maximum number of matches to return (default: 50)")
+  },
+  async ({ taskId, pattern, contextLines = 0, maxMatches = 50 }) => {
+    const task = runningAgents.get(taskId);
+    if (!task) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: `Task '${taskId}' not found` }) }]
+      };
+    }
+
+    if (!fs.existsSync(task.logFile)) {
+      return {
+        content: [{ type: "text", text: "(no output yet)" }]
+      };
+    }
+
+    const fullContent = fs.readFileSync(task.logFile, "utf-8");
+    const lines = fullContent.split("\n");
+
+    let regex: RegExp;
+    try {
+      regex = new RegExp(pattern, "i");
+    } catch (e) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: `Invalid regex pattern: ${pattern}` }) }]
+      };
+    }
+
+    const matches: { lineNumber: number; context: string[] }[] = [];
+    const includedLineNumbers = new Set<number>();
+
+    for (let i = 0; i < lines.length && matches.length < maxMatches; i++) {
+      if (regex.test(lines[i])) {
+        const startLine = Math.max(0, i - contextLines);
+        const endLine = Math.min(lines.length - 1, i + contextLines);
+
+        // Avoid duplicating lines already included in previous matches
+        const contextSlice: string[] = [];
+        for (let j = startLine; j <= endLine; j++) {
+          if (!includedLineNumbers.has(j)) {
+            const prefix = j === i ? ">>> " : "    ";
+            contextSlice.push(`${j + 1}:${prefix}${lines[j]}`);
+            includedLineNumbers.add(j);
+          }
+        }
+
+        if (contextSlice.length > 0) {
+          matches.push({ lineNumber: i + 1, context: contextSlice });
+        }
+      }
+    }
+
+    const totalMatches = lines.filter(line => regex.test(line)).length;
+    const metadata = {
+      pattern,
+      totalMatches,
+      returnedMatches: matches.length,
+      truncated: totalMatches > maxMatches
+    };
+
+    const output = matches.map(m => m.context.join("\n")).join("\n---\n");
+
+    return {
+      content: [{
+        type: "text",
+        text: `--- Search results: ${JSON.stringify(metadata)} ---\n${output || "(no matches found)"}`
+      }]
     };
   }
 );

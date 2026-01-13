@@ -21,7 +21,26 @@ You have access to these tools for spawning and managing subagents:
 | `mcp__orchestrator__get_agent_status` | Check status and read output of an agent |
 | `mcp__orchestrator__list_agents` | List all available and spawned agents |
 | `mcp__orchestrator__kill_agent` | Terminate a running agent |
-| `mcp__orchestrator__read_agent_log` | Read the full log of an agent |
+| `mcp__orchestrator__read_agent_log` | Read agent logs with pagination (`offset`, `limit`, `tail`) |
+| `mcp__orchestrator__search_agent_logs` | Search logs with regex pattern and context lines |
+
+### Efficient Log Reading
+
+To avoid filling context with large logs, prefer these approaches:
+
+```
+# Get last 50 lines of log (check recent progress)
+read_agent_log(taskId: "...", tail: true, limit: 50)
+
+# Search for errors in logs
+search_agent_logs(taskId: "...", pattern: "error|failed|exception", contextLines: 3)
+
+# Paginate through logs
+read_agent_log(taskId: "...", offset: 0, limit: 100)  # first 100 lines
+read_agent_log(taskId: "...", offset: 100, limit: 100)  # next 100 lines
+```
+
+**Avoid** calling `read_agent_log` without parameters on long-running agents - it returns the full log.
 
 ### Spawn Agent Parameters
 
