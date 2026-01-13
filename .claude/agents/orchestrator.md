@@ -18,12 +18,11 @@ You have access to these tools for spawning and managing subagents:
 | Tool | Purpose |
 |------|---------|
 | `mcp__orchestrator__spawn_agent` | Launch a subagent with a specific task |
-| `mcp__orchestrator__get_agent_status` | Check status + get final result summary (recommended) |
-| `mcp__orchestrator__get_agent_activity` | Get structured activity log (parsed, not raw JSON) |
+| `mcp__orchestrator__get_agent_status` | Check status + get final result summary |
+| `mcp__orchestrator__get_agent_activity` | Get structured activity log (parsed entries) |
+| `mcp__orchestrator__search_agent_activity` | Search parsed activity with regex |
 | `mcp__orchestrator__list_agents` | List all available and spawned agents |
 | `mcp__orchestrator__kill_agent` | Terminate a running agent |
-| `mcp__orchestrator__read_agent_log` | Read raw logs (fallback, prefer get_agent_activity) |
-| `mcp__orchestrator__search_agent_logs` | Search raw logs with regex (fallback) |
 
 ### Checking Agent Results
 
@@ -31,6 +30,7 @@ You have access to these tools for spawning and managing subagents:
 
 1. `get_agent_status(taskId, block: true)` - Wait for completion, get final summary
 2. If you need more detail: `get_agent_activity(taskId, filter: "text")` - See what agent said
+3. To find specific info: `search_agent_activity(taskId, pattern: "...")` - Search parsed content
 
 ```
 # Wait for agent and get result summary
@@ -41,11 +41,11 @@ get_agent_status(taskId: "...", block: true)
 get_agent_activity(taskId: "...", limit: 20)
 # Returns: { entries: [{ type: "text", content: "..." }, { type: "tool_call", ... }] }
 
-# Filter to just tool usage
-get_agent_activity(taskId: "...", filter: "tools")
+# Search for specific content (searches in parsed text, not raw JSON)
+search_agent_activity(taskId: "...", pattern: "error|failed")
+search_agent_activity(taskId: "...", pattern: "Edit", filter: "tools")  # Find file edits
+search_agent_activity(taskId: "...", pattern: "Root Cause|Conclusion", filter: "text")
 ```
-
-**Avoid** using `read_agent_log` or `search_agent_logs` unless you need raw log access.
 
 ### Spawn Agent Parameters
 

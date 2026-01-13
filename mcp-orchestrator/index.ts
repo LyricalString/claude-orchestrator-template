@@ -923,192 +923,6 @@ server.tool(
   }
 );
 
-// Tool: read_agent_log
-server.tool(
-  "read_agent_log",
-  "Read the log file of an agent task. Supports pagination, tail mode, and character limits.",
-  {
-    taskId: z.string().describe("The task ID to read logs for"),
-    offset: z.number().optional().describe("Line number to start reading from (0-indexed). Ignored if tail is true."),
-    limit: z.number().optional().describe("Maximum number of lines to return (default: 50 if no offset/tail, otherwise unlimited)."),
-    tail: z.boolean().optional().describe("If true, read from the end of the file instead of the beginning."),
-    maxLineLength: z.number().optional().describe("Truncate lines longer than this (default: 500)"),
-    maxTotalChars: z.number().optional().describe("Maximum total characters in output (default: 20000)")
-  },
-  async ({ taskId, offset, limit, tail, maxLineLength = 500, maxTotalChars = 20000 }) => {
-    const task = runningAgents.get(taskId);
-    if (!task) {
-      return {
-        content: [{ type: "text", text: JSON.stringify({ error: `Task '${taskId}' not found` }) }]
-      };
-    }
-
-    if (!fs.existsSync(task.logFile)) {
-      return {
-        content: [{ type: "text", text: "(no output yet)" }]
-      };
-    }
-
-    const fullContent = fs.readFileSync(task.logFile, "utf-8");
-    const lines = fullContent.split("\n");
-    const totalLines = lines.length;
-
-    // Helper to truncate long lines
-    const truncateLine = (line: string): string => {
-      if (line.length <= maxLineLength) return line;
-      return line.substring(0, maxLineLength) + "... [truncated]";
-    };
-
-    let resultLines: string[];
-    // Default to 50 lines if no pagination params specified
-    const effectiveLimit = limit ?? (offset === undefined && !tail ? 50 : undefined);
-
-    if (tail && effectiveLimit) {
-      // Read last N lines
-      resultLines = lines.slice(-effectiveLimit);
-    } else if (offset !== undefined || effectiveLimit !== undefined) {
-      // Pagination mode
-      const startLine = offset ?? 0;
-      const endLine = effectiveLimit ? startLine + effectiveLimit : undefined;
-      resultLines = lines.slice(startLine, endLine);
-    } else {
-      // Return all lines (but will be truncated by maxTotalChars)
-      resultLines = lines;
-    }
-
-    // Truncate lines and enforce total character limit
-    let totalChars = 0;
-    let truncatedByCharLimit = false;
-    const processedLines: string[] = [];
-
-    for (const line of resultLines) {
-      const truncated = truncateLine(line);
-      if (totalChars + truncated.length + 1 > maxTotalChars) {
-        truncatedByCharLimit = true;
-        break;
-      }
-      processedLines.push(truncated);
-      totalChars += truncated.length + 1; // +1 for newline
-    }
-
-    const output = processedLines.join("\n");
-    const metadata = {
-      totalLines,
-      returnedLines: processedLines.length,
-      ...(offset !== undefined && { offset }),
-      ...(effectiveLimit !== undefined && { limit: effectiveLimit }),
-      ...(tail && { tail: true }),
-      ...(truncatedByCharLimit && { note: "Output truncated due to maxTotalChars limit" })
-    };
-
-    return {
-      content: [{
-        type: "text",
-        text: `--- Log metadata: ${JSON.stringify(metadata)} ---\n${output || "(empty)"}`
-      }]
-    };
-  }
-);
-
-// Tool: search_agent_logs
-server.tool(
-  "search_agent_logs",
-  "Search for a pattern in agent logs. Returns matching lines with optional context. Lines are truncated to maxLineLength chars.",
-  {
-    taskId: z.string().describe("The task ID to search logs for"),
-    pattern: z.string().describe("Regex pattern to search for in the logs"),
-    contextLines: z.number().optional().describe("Number of lines to include before and after each match (default: 0)"),
-    maxMatches: z.number().optional().describe("Maximum number of matches to return (default: 10)"),
-    maxLineLength: z.number().optional().describe("Truncate lines longer than this (default: 500)"),
-    maxTotalChars: z.number().optional().describe("Maximum total characters in output (default: 15000)")
-  },
-  async ({ taskId, pattern, contextLines = 0, maxMatches = 10, maxLineLength = 500, maxTotalChars = 15000 }) => {
-    const task = runningAgents.get(taskId);
-    if (!task) {
-      return {
-        content: [{ type: "text", text: JSON.stringify({ error: `Task '${taskId}' not found` }) }]
-      };
-    }
-
-    if (!fs.existsSync(task.logFile)) {
-      return {
-        content: [{ type: "text", text: "(no output yet)" }]
-      };
-    }
-
-    const fullContent = fs.readFileSync(task.logFile, "utf-8");
-    const lines = fullContent.split("\n");
-
-    let regex: RegExp;
-    try {
-      regex = new RegExp(pattern, "i");
-    } catch (e) {
-      return {
-        content: [{ type: "text", text: JSON.stringify({ error: `Invalid regex pattern: ${pattern}` }) }]
-      };
-    }
-
-    // Helper to truncate long lines
-    const truncateLine = (line: string): string => {
-      if (line.length <= maxLineLength) return line;
-      return line.substring(0, maxLineLength) + "... [truncated]";
-    };
-
-    const matches: { lineNumber: number; context: string[] }[] = [];
-    const includedLineNumbers = new Set<number>();
-    let totalChars = 0;
-    let hitCharLimit = false;
-
-    for (let i = 0; i < lines.length && matches.length < maxMatches && !hitCharLimit; i++) {
-      if (regex.test(lines[i])) {
-        const startLine = Math.max(0, i - contextLines);
-        const endLine = Math.min(lines.length - 1, i + contextLines);
-
-        // Avoid duplicating lines already included in previous matches
-        const contextSlice: string[] = [];
-        for (let j = startLine; j <= endLine && !hitCharLimit; j++) {
-          if (!includedLineNumbers.has(j)) {
-            const prefix = j === i ? ">>> " : "    ";
-            const truncated = truncateLine(lines[j]);
-            const formattedLine = `${j + 1}:${prefix}${truncated}`;
-
-            if (totalChars + formattedLine.length > maxTotalChars) {
-              hitCharLimit = true;
-              break;
-            }
-
-            contextSlice.push(formattedLine);
-            totalChars += formattedLine.length + 1; // +1 for newline
-            includedLineNumbers.add(j);
-          }
-        }
-
-        if (contextSlice.length > 0) {
-          matches.push({ lineNumber: i + 1, context: contextSlice });
-        }
-      }
-    }
-
-    const totalMatches = lines.filter(line => regex.test(line)).length;
-    const metadata = {
-      pattern,
-      totalMatches,
-      returnedMatches: matches.length,
-      truncated: totalMatches > maxMatches || hitCharLimit,
-      ...(hitCharLimit && { note: "Output truncated due to maxTotalChars limit" })
-    };
-
-    const output = matches.map(m => m.context.join("\n")).join("\n---\n");
-
-    return {
-      content: [{
-        type: "text",
-        text: `--- Search results: ${JSON.stringify(metadata)} ---\n${output || "(no matches found)"}`
-      }]
-    };
-  }
-);
-
 // Tool: get_agent_activity
 server.tool(
   "get_agent_activity",
@@ -1171,6 +985,107 @@ server.tool(
           returnedEntries: truncatedEntries.length,
           filter,
           entries: truncatedEntries
+        }, null, 2)
+      }]
+    };
+  }
+);
+
+// Tool: search_agent_activity
+server.tool(
+  "search_agent_activity",
+  "Search through parsed agent activity using regex. Searches in content, toolName, and toolInput fields. Returns matching entries with context.",
+  {
+    taskId: z.string().describe("The task ID to search"),
+    pattern: z.string().describe("Regex pattern to search for in parsed content"),
+    filter: z.enum(["all", "text", "tools", "result"]).optional().describe("Filter entries before searching: 'all' (default), 'text', 'tools', 'result'"),
+    maxMatches: z.number().optional().describe("Maximum number of matching entries to return (default: 20)"),
+    includeContext: z.boolean().optional().describe("If true, include 1 entry before and after each match (default: false)"),
+    maxContentLength: z.number().optional().describe("Truncate content longer than this (default: 500)")
+  },
+  async ({ taskId, pattern, filter = "all", maxMatches = 20, includeContext = false, maxContentLength = 500 }) => {
+    const task = runningAgents.get(taskId);
+    if (!task) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: `Task '${taskId}' not found` }) }]
+      };
+    }
+
+    if (!fs.existsSync(task.logFile)) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ matches: [], message: "No output yet" }) }]
+      };
+    }
+
+    let regex: RegExp;
+    try {
+      regex = new RegExp(pattern, "i");
+    } catch (e) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: `Invalid regex pattern: ${pattern}` }) }]
+      };
+    }
+
+    const rawLog = fs.readFileSync(task.logFile, "utf-8");
+    let entries = parseLog(rawLog);
+
+    // Apply type filter first
+    if (filter === "text") {
+      entries = entries.filter(e => e.type === "text");
+    } else if (filter === "tools") {
+      entries = entries.filter(e => e.type === "tool_call" || e.type === "tool_result");
+    } else if (filter === "result") {
+      entries = entries.filter(e => e.type === "result");
+    }
+
+    // Search in content, toolName, toolInput
+    const matchIndices: number[] = [];
+    for (let i = 0; i < entries.length && matchIndices.length < maxMatches; i++) {
+      const e = entries[i];
+      const searchText = [e.content, e.toolName || "", e.toolInput || ""].join(" ");
+      if (regex.test(searchText)) {
+        matchIndices.push(i);
+      }
+    }
+
+    // Collect matches with optional context
+    const resultIndices = new Set<number>();
+    for (const idx of matchIndices) {
+      if (includeContext && idx > 0) resultIndices.add(idx - 1);
+      resultIndices.add(idx);
+      if (includeContext && idx < entries.length - 1) resultIndices.add(idx + 1);
+    }
+
+    // Build result entries with match indicators
+    const truncate = (s: string) => s.length > maxContentLength ? s.slice(0, maxContentLength) + "..." : s;
+    const resultEntries = Array.from(resultIndices).sort((a, b) => a - b).map(idx => ({
+      index: idx,
+      isMatch: matchIndices.includes(idx),
+      type: entries[idx].type,
+      content: truncate(entries[idx].content),
+      ...(entries[idx].toolName && { toolName: entries[idx].toolName }),
+      ...(entries[idx].toolInput && { toolInput: truncate(entries[idx].toolInput || "") }),
+      ...(entries[idx].stats && { stats: entries[idx].stats })
+    }));
+
+    const totalMatches = entries.filter(e => {
+      const searchText = [e.content, e.toolName || "", e.toolInput || ""].join(" ");
+      return regex.test(searchText);
+    }).length;
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          taskId,
+          agent: task.agentName,
+          status: task.status,
+          pattern,
+          filter,
+          totalMatches,
+          returnedMatches: matchIndices.length,
+          entriesReturned: resultEntries.length,
+          matches: resultEntries
         }, null, 2)
       }]
     };

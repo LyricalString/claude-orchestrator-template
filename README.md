@@ -134,11 +134,10 @@ The orchestrator uses an MCP server that provides these tools:
 | ---- | ------- |
 | `mcp__orchestrator__spawn_agent` | Launch a subagent with a specific task |
 | `mcp__orchestrator__get_agent_status` | Check status + get final result summary. **Use `block=true` to wait** |
-| `mcp__orchestrator__get_agent_activity` | Get structured activity log (parsed entries, not raw JSON) |
+| `mcp__orchestrator__get_agent_activity` | Get structured activity log (parsed entries) |
+| `mcp__orchestrator__search_agent_activity` | Search parsed activity with regex |
 | `mcp__orchestrator__list_agents` | List all available and spawned agents |
 | `mcp__orchestrator__kill_agent` | Terminate a running agent |
-| `mcp__orchestrator__read_agent_log` | Read raw logs with pagination (fallback) |
-| `mcp__orchestrator__search_agent_logs` | Search raw logs with regex (fallback) |
 
 ### Waiting for Agents to Complete
 
