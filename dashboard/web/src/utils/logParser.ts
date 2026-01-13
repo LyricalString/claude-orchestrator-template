@@ -36,6 +36,8 @@ interface StreamJsonMessage {
       text?: string;
       name?: string;
       input?: Record<string, unknown>;
+      tool_use_id?: string;
+      content?: string | Array<{ type: string; text?: string }>;
     }>;
   };
   result?: string;
@@ -46,6 +48,12 @@ interface StreamJsonMessage {
   tool_use_result?: {
     stdout?: string;
     stderr?: string;
+  };
+  content_block?: {
+    type: string;
+    text?: string;
+    name?: string;
+    input?: Record<string, unknown>;
   };
 }
 
@@ -113,6 +121,19 @@ function parseJsonEntry(data: StreamJsonMessage, finalResultText: string | null)
     return null;
   }
 
+  // Handle content_block streaming format
+  if (data.type === "content_block_start" && data.content_block) {
+    const block = data.content_block;
+    if (block.type === "tool_use" && block.name) {
+      return {
+        type: "tool_call",
+        content: block.name,
+        toolName: block.name,
+        toolInput: block.input ? formatToolInput(block.name, block.input) : undefined,
+      };
+    }
+  }
+
   // Assistant message with text or tool use
   if (data.type === "assistant" && data.message?.content) {
     for (const block of data.message.content) {
@@ -137,7 +158,7 @@ function parseJsonEntry(data: StreamJsonMessage, finalResultText: string | null)
     }
   }
 
-  // Tool result
+  // Tool result (old format with tool_use_result)
   if (data.type === "user" && data.tool_use_result) {
     const stdout = data.tool_use_result.stdout || "";
     const stderr = data.tool_use_result.stderr || "";
@@ -147,6 +168,30 @@ function parseJsonEntry(data: StreamJsonMessage, finalResultText: string | null)
       content: content,
       isError: !!stderr,
     };
+  }
+
+  // Tool result (new format with message.content array)
+  if (data.type === "user" && data.message?.content) {
+    for (const block of data.message.content) {
+      if (block.type === "tool_result" && block.content !== undefined) {
+        let content: string;
+        if (typeof block.content === "string") {
+          content = block.content;
+        } else if (Array.isArray(block.content)) {
+          content = block.content
+            .filter((c) => c.type === "text" && c.text)
+            .map((c) => c.text)
+            .join("\n");
+        } else {
+          content = "";
+        }
+        return {
+          type: "tool_result",
+          content: content,
+          isError: false,
+        };
+      }
+    }
   }
 
   // Final result
