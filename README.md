@@ -53,13 +53,21 @@ Claude will:
 
 ## Updating
 
-To update the MCP server and dashboard:
+The dashboard will notify you when updates are available with a banner showing the update command.
+
+### Quick Update (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LyricalString/claude-orchestrator-template/main/update.sh | bash
+```
+
+### Or use the local script
 
 ```bash
 ~/.claude-orchestrator/bin/update.sh
 ```
 
-This updates the global installation without touching your project-specific agents or config.
+Both methods update the global installation (MCP server + dashboard) without touching your project-specific agents or config.
 
 ---
 

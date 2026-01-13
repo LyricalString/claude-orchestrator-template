@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { AgentList } from "./components/AgentList";
 import { LogViewer } from "./components/LogViewer";
-import { useProjects, useStats } from "./hooks/usePolling";
+import { UpdateBanner } from "./components/UpdateBanner";
+import { useProjects, useStats, useVersion } from "./hooks/usePolling";
 import { useAgentsSSE, useLogSSE } from "./hooks/useSSE";
 import type { Agent } from "./types";
 
@@ -14,12 +15,17 @@ function App() {
   const { agents, connected } = useAgentsSSE(selectedProjectId ?? undefined);
   const stats = useStats();
   const log = useLogSSE(selectedAgentId);
+  const { version, dismissed, dismiss } = useVersion();
 
   const selectedAgent: Agent | null =
     agents.find((a) => a.id === selectedAgentId) ?? null;
 
   return (
     <div className="app">
+      {version && !dismissed && (
+        <UpdateBanner version={version} onDismiss={dismiss} />
+      )}
+
       <header className="header">
         <h1>Claude Orchestrator Dashboard</h1>
         <div className="stats">

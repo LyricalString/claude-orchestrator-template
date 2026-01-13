@@ -18,6 +18,85 @@ const app = new Hono();
 const BASE_PORT = 4000;
 const MAX_PORT = 4100;
 
+// Version check configuration
+const GITHUB_REPO = "LyricalString/claude-orchestrator-template";
+const VERSION_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+// Read current version from package.json
+const packageJson = JSON.parse(readFileSync(join(import.meta.dirname, "package.json"), "utf-8"));
+const CURRENT_VERSION = packageJson.version;
+
+// Cache for GitHub version check
+let versionCache: {
+  latest: string | null;
+  checkedAt: number;
+  updateUrl: string | null;
+} = {
+  latest: null,
+  checkedAt: 0,
+  updateUrl: null,
+};
+
+async function checkLatestVersion(): Promise<typeof versionCache> {
+  const now = Date.now();
+
+  // Return cached result if still valid
+  if (versionCache.latest && now - versionCache.checkedAt < VERSION_CACHE_TTL) {
+    return versionCache;
+  }
+
+  try {
+    const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+      headers: {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "claude-orchestrator-dashboard",
+      },
+    });
+
+    if (!res.ok) {
+      // If no releases yet, check tags
+      const tagsRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/tags`, {
+        headers: {
+          "Accept": "application/vnd.github.v3+json",
+          "User-Agent": "claude-orchestrator-dashboard",
+        },
+      });
+
+      if (tagsRes.ok) {
+        const tags = await tagsRes.json();
+        if (tags.length > 0) {
+          const latestTag = tags[0].name.replace(/^v/, "");
+          versionCache = {
+            latest: latestTag,
+            checkedAt: now,
+            updateUrl: `https://github.com/${GITHUB_REPO}/releases/tag/${tags[0].name}`,
+          };
+          return versionCache;
+        }
+      }
+
+      // No releases or tags, assume current is latest
+      versionCache = { latest: CURRENT_VERSION, checkedAt: now, updateUrl: null };
+      return versionCache;
+    }
+
+    const data = await res.json();
+    const latestVersion = data.tag_name?.replace(/^v/, "") || CURRENT_VERSION;
+
+    versionCache = {
+      latest: latestVersion,
+      checkedAt: now,
+      updateUrl: data.html_url || null,
+    };
+
+    return versionCache;
+  } catch (error) {
+    console.error("[Version Check] Failed to fetch latest version:", error);
+    // On error, return current version to avoid showing false update
+    return { latest: CURRENT_VERSION, checkedAt: now, updateUrl: null };
+  }
+}
+
 // Data files stored in shared directory (~/.claude-orchestrator/)
 const LOGS_DIR = join(DATA_DIR, "logs");
 const PID_FILE = join(DATA_DIR, "dashboard.pid");
@@ -170,6 +249,35 @@ app.get("/api/stats", (c) => {
 app.get("/api/health", (c) => {
   return c.json({ status: "ok", pid: process.pid });
 });
+
+// Version check endpoint
+app.get("/api/version", async (c) => {
+  const { latest, updateUrl } = await checkLatestVersion();
+
+  const hasUpdate = latest !== null && latest !== CURRENT_VERSION && compareVersions(latest, CURRENT_VERSION) > 0;
+
+  return c.json({
+    current: CURRENT_VERSION,
+    latest: latest || CURRENT_VERSION,
+    hasUpdate,
+    updateUrl,
+    updateCommand: "curl -fsSL https://raw.githubusercontent.com/LyricalString/claude-orchestrator-template/main/update.sh | bash",
+  });
+});
+
+// Simple semver comparison (returns 1 if a > b, -1 if a < b, 0 if equal)
+function compareVersions(a: string, b: string): number {
+  const partsA = a.split(".").map(Number);
+  const partsB = b.split(".").map(Number);
+
+  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+    const numA = partsA[i] || 0;
+    const numB = partsB[i] || 0;
+    if (numA > numB) return 1;
+    if (numA < numB) return -1;
+  }
+  return 0;
+}
 
 // SSE endpoint for real-time updates
 app.get("/api/events", async (c) => {

@@ -38,3 +38,11 @@ export interface LogResponse {
   size: number;
   offset: number;
 }
+
+export interface VersionInfo {
+  current: string;
+  latest: string;
+  hasUpdate: boolean;
+  updateUrl: string | null;
+  updateCommand: string;
+}

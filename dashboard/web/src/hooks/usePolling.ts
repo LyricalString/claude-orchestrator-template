@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import type { Project, Agent, Stats, LogResponse } from "../types";
+import { useState, useEffect, useRef } from "react";
+import type { Project, Agent, Stats, LogResponse, VersionInfo } from "../types";
 
 const POLL_INTERVAL = 2000;
 
@@ -111,4 +111,31 @@ export function useLogStream(agentId: string | null) {
   }, [agentId]);
 
   return log;
+}
+
+const VERSION_CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
+
+export function useVersion() {
+  const [version, setVersion] = useState<VersionInfo | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const res = await fetch("/api/version");
+        const data: VersionInfo = await res.json();
+        setVersion(data);
+      } catch (err) {
+        console.error("Failed to check version:", err);
+      }
+    };
+
+    check();
+    const interval = setInterval(check, VERSION_CHECK_INTERVAL);
+    return () => clearInterval(interval);
+  }, []);
+
+  const dismiss = () => setDismissed(true);
+
+  return { version, dismissed, dismiss };
 }
