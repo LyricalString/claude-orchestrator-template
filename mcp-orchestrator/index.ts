@@ -64,6 +64,176 @@ const runningAgents: Map<string, AgentTask> = new Map();
 const INVESTIGATE_TOOLS = "Read,Glob,Grep,LS,WebFetch,WebSearch";
 const IMPLEMENT_TOOLS = "Read,Glob,Grep,LS,Edit,Write,Bash,WebFetch,WebSearch";
 
+// ============ Log Parser ============
+
+interface LogEntry {
+  type: "text" | "tool_call" | "tool_result" | "result" | "error";
+  content: string;
+  toolName?: string;
+  toolInput?: string;
+  isError?: boolean;
+  stats?: {
+    duration_ms: number;
+    total_cost_usd: number;
+    input_tokens: number;
+    output_tokens: number;
+    num_turns: number;
+  };
+}
+
+interface StreamJsonMessage {
+  type: string;
+  subtype?: string;
+  message?: {
+    content?: Array<{
+      type: string;
+      text?: string;
+      name?: string;
+      input?: Record<string, unknown>;
+      tool_use_id?: string;
+      content?: string | Array<{ type: string; text?: string }>;
+    }>;
+  };
+  result?: string;
+  duration_ms?: number;
+  total_cost_usd?: number;
+  num_turns?: number;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+  content_block?: {
+    type: string;
+    text?: string;
+    name?: string;
+    input?: Record<string, unknown>;
+  };
+}
+
+function formatToolInput(toolName: string, input: Record<string, unknown>): string {
+  const knownKeys: Record<string, string> = {
+    Bash: "command", Read: "file_path", Glob: "pattern",
+    Grep: "pattern", Edit: "file_path", Write: "file_path"
+  };
+  const key = knownKeys[toolName];
+  if (key && input[key]) {
+    const val = String(input[key]);
+    return val.length > 100 ? val.slice(0, 100) + "..." : val;
+  }
+  const values = Object.values(input).filter(v => v && typeof v === "string");
+  if (values.length > 0) {
+    const val = String(values[0]);
+    return val.length > 100 ? val.slice(0, 100) + "..." : val;
+  }
+  return "";
+}
+
+function parseJsonEntry(data: StreamJsonMessage, finalResultText: string | null): LogEntry | null {
+  if (data.type === "system" && data.subtype === "init") return null;
+
+  // Content block streaming format (tool_use)
+  if (data.type === "content_block_start" && data.content_block) {
+    const block = data.content_block;
+    if (block.type === "tool_use" && block.name) {
+      return {
+        type: "tool_call",
+        content: block.name,
+        toolName: block.name,
+        toolInput: block.input ? formatToolInput(block.name, block.input) : undefined,
+      };
+    }
+  }
+
+  // Assistant message with text or tool use
+  if (data.type === "assistant" && data.message?.content) {
+    for (const block of data.message.content) {
+      if (block.type === "text" && block.text) {
+        if (finalResultText && block.text === finalResultText) return null;
+        return { type: "text", content: block.text };
+      }
+      if (block.type === "tool_use" && block.name) {
+        return {
+          type: "tool_call",
+          content: block.name,
+          toolName: block.name,
+          toolInput: block.input ? formatToolInput(block.name, block.input) : undefined,
+        };
+      }
+    }
+  }
+
+  // Tool result
+  if (data.type === "user" && data.message?.content) {
+    for (const block of data.message.content) {
+      if (block.type === "tool_result" && block.content !== undefined) {
+        let content: string;
+        if (typeof block.content === "string") {
+          content = block.content;
+        } else if (Array.isArray(block.content)) {
+          content = block.content
+            .filter((c) => c.type === "text" && c.text)
+            .map((c) => c.text)
+            .join("\n");
+        } else {
+          content = "";
+        }
+        return { type: "tool_result", content, isError: false };
+      }
+    }
+  }
+
+  // Final result
+  if (data.type === "result") {
+    return {
+      type: "result",
+      content: data.result || "Task completed",
+      stats: {
+        duration_ms: data.duration_ms || 0,
+        total_cost_usd: data.total_cost_usd || 0,
+        input_tokens: data.usage?.input_tokens || 0,
+        output_tokens: data.usage?.output_tokens || 0,
+        num_turns: data.num_turns || 0,
+      },
+    };
+  }
+
+  return null;
+}
+
+function parseLog(rawLog: string): LogEntry[] {
+  const entries: LogEntry[] = [];
+  const lines = rawLog.split("\n");
+  let inHeader = false;
+  let finalResultText: string | null = null;
+
+  // First pass: find final result to avoid duplicates
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed === "---") continue;
+    try {
+      const data = JSON.parse(trimmed) as StreamJsonMessage;
+      if (data.type === "result" && data.result) {
+        finalResultText = data.result;
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Second pass: parse entries
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === "---") { inHeader = !inHeader; continue; }
+    if (inHeader || !trimmed) continue;
+
+    try {
+      const data = JSON.parse(trimmed) as StreamJsonMessage;
+      const entry = parseJsonEntry(data, finalResultText);
+      if (entry) entries.push(entry);
+    } catch { /* skip non-JSON */ }
+  }
+
+  return entries;
+}
+
 // ============ Dashboard Integration ============
 
 let db: Database | null = null;
@@ -552,7 +722,7 @@ async function waitForAgent(task: AgentTask, timeoutMs: number): Promise<void> {
 }
 
 /**
- * Get the status of an agent (without output - use read_agent_log for that)
+ * Get the status of an agent with final result summary
  * @param block - If true, wait for agent to complete before returning
  * @param timeoutMs - Maximum time to wait in milliseconds (default: 5 minutes)
  */
@@ -560,7 +730,7 @@ async function getAgentStatus(
   taskId: string,
   block: boolean = false,
   timeoutMs: number = 300000
-): Promise<{ task: AgentTask; timedOut?: boolean } | { error: string }> {
+): Promise<{ task: AgentTask; timedOut?: boolean; result?: LogEntry } | { error: string }> {
   const task = runningAgents.get(taskId);
   if (!task) {
     return { error: `Task '${taskId}' not found` };
@@ -578,7 +748,17 @@ async function getAgentStatus(
     isAgentRunning(task);
   }
 
-  return { task };
+  // Extract final result from parsed log if agent completed
+  let result: LogEntry | undefined;
+  if (task.status !== "running" && fs.existsSync(task.logFile)) {
+    try {
+      const rawLog = fs.readFileSync(task.logFile, "utf-8");
+      const entries = parseLog(rawLog);
+      result = entries.find(e => e.type === "result");
+    } catch { /* ignore parse errors */ }
+  }
+
+  return { task, result };
 }
 
 /**
@@ -660,18 +840,18 @@ server.tool(
 // Tool: get_agent_status
 server.tool(
   "get_agent_status",
-  "Get the status of an agent task. Use block=true to wait for completion. Use read_agent_log or search_agent_logs to view output.",
+  "Get the status of an agent task with final result summary. Use block=true to wait for completion.",
   {
     taskId: z.string().describe("The task ID returned by spawn_agent"),
     block: z.boolean().optional().default(false).describe("If true, wait for agent to complete before returning (default: false)"),
     timeout: z.number().optional().default(300000).describe("Maximum time to wait in milliseconds when blocking (default: 300000 = 5 minutes)")
   },
   async ({ taskId, block, timeout }) => {
-    const result = await getAgentStatus(taskId, block, timeout);
+    const statusResult = await getAgentStatus(taskId, block, timeout);
 
-    if ("error" in result) {
+    if ("error" in statusResult) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ error: result.error }, null, 2) }]
+        content: [{ type: "text", text: JSON.stringify({ error: statusResult.error }, null, 2) }]
       };
     }
 
@@ -679,14 +859,21 @@ server.tool(
       content: [{
         type: "text",
         text: JSON.stringify({
-          taskId: result.task.id,
-          agent: result.task.agentName,
-          status: result.task.status,
-          mode: result.task.mode,
-          startedAt: result.task.startedAt,
-          completedAt: result.task.completedAt,
-          exitCode: result.task.exitCode,
-          timedOut: result.timedOut || false
+          taskId: statusResult.task.id,
+          agent: statusResult.task.agentName,
+          status: statusResult.task.status,
+          mode: statusResult.task.mode,
+          startedAt: statusResult.task.startedAt,
+          completedAt: statusResult.task.completedAt,
+          exitCode: statusResult.task.exitCode,
+          timedOut: statusResult.timedOut || false,
+          // Include result summary if available (final message from agent)
+          ...(statusResult.result && {
+            result: {
+              summary: statusResult.result.content,
+              stats: statusResult.result.stats
+            }
+          })
         }, null, 2)
       }]
     };
@@ -739,14 +926,16 @@ server.tool(
 // Tool: read_agent_log
 server.tool(
   "read_agent_log",
-  "Read the log file of an agent task. Supports pagination and tail mode to avoid loading full logs.",
+  "Read the log file of an agent task. Supports pagination, tail mode, and character limits.",
   {
     taskId: z.string().describe("The task ID to read logs for"),
     offset: z.number().optional().describe("Line number to start reading from (0-indexed). Ignored if tail is true."),
-    limit: z.number().optional().describe("Maximum number of lines to return. Defaults to all lines."),
-    tail: z.boolean().optional().describe("If true, read from the end of the file instead of the beginning.")
+    limit: z.number().optional().describe("Maximum number of lines to return (default: 50 if no offset/tail, otherwise unlimited)."),
+    tail: z.boolean().optional().describe("If true, read from the end of the file instead of the beginning."),
+    maxLineLength: z.number().optional().describe("Truncate lines longer than this (default: 500)"),
+    maxTotalChars: z.number().optional().describe("Maximum total characters in output (default: 20000)")
   },
-  async ({ taskId, offset, limit, tail }) => {
+  async ({ taskId, offset, limit, tail, maxLineLength = 500, maxTotalChars = 20000 }) => {
     const task = runningAgents.get(taskId);
     if (!task) {
       return {
@@ -764,28 +953,52 @@ server.tool(
     const lines = fullContent.split("\n");
     const totalLines = lines.length;
 
-    let resultLines: string[];
+    // Helper to truncate long lines
+    const truncateLine = (line: string): string => {
+      if (line.length <= maxLineLength) return line;
+      return line.substring(0, maxLineLength) + "... [truncated]";
+    };
 
-    if (tail && limit) {
+    let resultLines: string[];
+    // Default to 50 lines if no pagination params specified
+    const effectiveLimit = limit ?? (offset === undefined && !tail ? 50 : undefined);
+
+    if (tail && effectiveLimit) {
       // Read last N lines
-      resultLines = lines.slice(-limit);
-    } else if (offset !== undefined || limit !== undefined) {
+      resultLines = lines.slice(-effectiveLimit);
+    } else if (offset !== undefined || effectiveLimit !== undefined) {
       // Pagination mode
       const startLine = offset ?? 0;
-      const endLine = limit ? startLine + limit : undefined;
+      const endLine = effectiveLimit ? startLine + effectiveLimit : undefined;
       resultLines = lines.slice(startLine, endLine);
     } else {
-      // Return all lines (backward compatible)
+      // Return all lines (but will be truncated by maxTotalChars)
       resultLines = lines;
     }
 
-    const output = resultLines.join("\n");
+    // Truncate lines and enforce total character limit
+    let totalChars = 0;
+    let truncatedByCharLimit = false;
+    const processedLines: string[] = [];
+
+    for (const line of resultLines) {
+      const truncated = truncateLine(line);
+      if (totalChars + truncated.length + 1 > maxTotalChars) {
+        truncatedByCharLimit = true;
+        break;
+      }
+      processedLines.push(truncated);
+      totalChars += truncated.length + 1; // +1 for newline
+    }
+
+    const output = processedLines.join("\n");
     const metadata = {
       totalLines,
-      returnedLines: resultLines.length,
+      returnedLines: processedLines.length,
       ...(offset !== undefined && { offset }),
-      ...(limit !== undefined && { limit }),
-      ...(tail && { tail: true })
+      ...(effectiveLimit !== undefined && { limit: effectiveLimit }),
+      ...(tail && { tail: true }),
+      ...(truncatedByCharLimit && { note: "Output truncated due to maxTotalChars limit" })
     };
 
     return {
@@ -800,14 +1013,16 @@ server.tool(
 // Tool: search_agent_logs
 server.tool(
   "search_agent_logs",
-  "Search for a pattern in agent logs. Returns matching lines with optional context. More efficient than reading full logs when looking for specific information.",
+  "Search for a pattern in agent logs. Returns matching lines with optional context. Lines are truncated to maxLineLength chars.",
   {
     taskId: z.string().describe("The task ID to search logs for"),
     pattern: z.string().describe("Regex pattern to search for in the logs"),
     contextLines: z.number().optional().describe("Number of lines to include before and after each match (default: 0)"),
-    maxMatches: z.number().optional().describe("Maximum number of matches to return (default: 50)")
+    maxMatches: z.number().optional().describe("Maximum number of matches to return (default: 10)"),
+    maxLineLength: z.number().optional().describe("Truncate lines longer than this (default: 500)"),
+    maxTotalChars: z.number().optional().describe("Maximum total characters in output (default: 15000)")
   },
-  async ({ taskId, pattern, contextLines = 0, maxMatches = 50 }) => {
+  async ({ taskId, pattern, contextLines = 0, maxMatches = 10, maxLineLength = 500, maxTotalChars = 15000 }) => {
     const task = runningAgents.get(taskId);
     if (!task) {
       return {
@@ -833,20 +1048,37 @@ server.tool(
       };
     }
 
+    // Helper to truncate long lines
+    const truncateLine = (line: string): string => {
+      if (line.length <= maxLineLength) return line;
+      return line.substring(0, maxLineLength) + "... [truncated]";
+    };
+
     const matches: { lineNumber: number; context: string[] }[] = [];
     const includedLineNumbers = new Set<number>();
+    let totalChars = 0;
+    let hitCharLimit = false;
 
-    for (let i = 0; i < lines.length && matches.length < maxMatches; i++) {
+    for (let i = 0; i < lines.length && matches.length < maxMatches && !hitCharLimit; i++) {
       if (regex.test(lines[i])) {
         const startLine = Math.max(0, i - contextLines);
         const endLine = Math.min(lines.length - 1, i + contextLines);
 
         // Avoid duplicating lines already included in previous matches
         const contextSlice: string[] = [];
-        for (let j = startLine; j <= endLine; j++) {
+        for (let j = startLine; j <= endLine && !hitCharLimit; j++) {
           if (!includedLineNumbers.has(j)) {
             const prefix = j === i ? ">>> " : "    ";
-            contextSlice.push(`${j + 1}:${prefix}${lines[j]}`);
+            const truncated = truncateLine(lines[j]);
+            const formattedLine = `${j + 1}:${prefix}${truncated}`;
+
+            if (totalChars + formattedLine.length > maxTotalChars) {
+              hitCharLimit = true;
+              break;
+            }
+
+            contextSlice.push(formattedLine);
+            totalChars += formattedLine.length + 1; // +1 for newline
             includedLineNumbers.add(j);
           }
         }
@@ -862,7 +1094,8 @@ server.tool(
       pattern,
       totalMatches,
       returnedMatches: matches.length,
-      truncated: totalMatches > maxMatches
+      truncated: totalMatches > maxMatches || hitCharLimit,
+      ...(hitCharLimit && { note: "Output truncated due to maxTotalChars limit" })
     };
 
     const output = matches.map(m => m.context.join("\n")).join("\n---\n");
@@ -871,6 +1104,74 @@ server.tool(
       content: [{
         type: "text",
         text: `--- Search results: ${JSON.stringify(metadata)} ---\n${output || "(no matches found)"}`
+      }]
+    };
+  }
+);
+
+// Tool: get_agent_activity
+server.tool(
+  "get_agent_activity",
+  "Get structured activity log from an agent. Returns parsed entries (text, tool calls, results) instead of raw JSON. Best way to understand what an agent did.",
+  {
+    taskId: z.string().describe("The task ID to get activity for"),
+    filter: z.enum(["all", "text", "tools", "result"]).optional().describe("Filter entries: 'all' (default), 'text' (assistant messages), 'tools' (tool calls + results), 'result' (final summary only)"),
+    limit: z.number().optional().describe("Maximum number of entries to return (default: 50)"),
+    tail: z.boolean().optional().describe("If true, return the last N entries instead of first N")
+  },
+  async ({ taskId, filter = "all", limit = 50, tail = false }) => {
+    const task = runningAgents.get(taskId);
+    if (!task) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: `Task '${taskId}' not found` }) }]
+      };
+    }
+
+    if (!fs.existsSync(task.logFile)) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ entries: [], message: "No output yet" }) }]
+      };
+    }
+
+    const rawLog = fs.readFileSync(task.logFile, "utf-8");
+    let entries = parseLog(rawLog);
+
+    // Apply filter
+    if (filter === "text") {
+      entries = entries.filter(e => e.type === "text");
+    } else if (filter === "tools") {
+      entries = entries.filter(e => e.type === "tool_call" || e.type === "tool_result");
+    } else if (filter === "result") {
+      entries = entries.filter(e => e.type === "result");
+    }
+
+    const totalEntries = entries.length;
+
+    // Apply limit (from start or end)
+    if (tail) {
+      entries = entries.slice(-limit);
+    } else {
+      entries = entries.slice(0, limit);
+    }
+
+    // Truncate long content to keep response size reasonable
+    const truncatedEntries = entries.map(e => ({
+      ...e,
+      content: e.content.length > 1000 ? e.content.slice(0, 1000) + "... [truncated]" : e.content
+    }));
+
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          taskId,
+          agent: task.agentName,
+          status: task.status,
+          totalEntries,
+          returnedEntries: truncatedEntries.length,
+          filter,
+          entries: truncatedEntries
+        }, null, 2)
       }]
     };
   }
