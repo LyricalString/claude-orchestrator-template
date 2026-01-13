@@ -95,7 +95,7 @@ main() {
     bun run install:all --silent
 
     echo "7. Building Dashboard..."
-    bun run build --silent
+    bun run build > /dev/null 2>&1
 
     # Cleanup
     echo "8. Cleaning up..."

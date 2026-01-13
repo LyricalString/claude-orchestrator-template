@@ -85,7 +85,7 @@ cd "$INSTALL_DIR/dashboard"
 bun run install:all --silent
 
 echo "8. Building Dashboard..."
-bun run build --silent
+bun run build > /dev/null 2>&1
 
 # Cleanup
 echo "9. Cleaning up..."
