@@ -45,10 +45,6 @@ interface StreamJsonMessage {
   total_cost_usd?: number;
   num_turns?: number;
   usage?: StreamJsonUsage;
-  tool_use_result?: {
-    stdout?: string;
-    stderr?: string;
-  };
   content_block?: {
     type: string;
     text?: string;
@@ -158,19 +154,7 @@ function parseJsonEntry(data: StreamJsonMessage, finalResultText: string | null)
     }
   }
 
-  // Tool result (old format with tool_use_result)
-  if (data.type === "user" && data.tool_use_result) {
-    const stdout = data.tool_use_result.stdout || "";
-    const stderr = data.tool_use_result.stderr || "";
-    const content = stderr ? `${stdout}\n${stderr}` : stdout;
-    return {
-      type: "tool_result",
-      content: content,
-      isError: !!stderr,
-    };
-  }
-
-  // Tool result (new format with message.content array)
+  // Tool result (message.content array with tool_result blocks)
   if (data.type === "user" && data.message?.content) {
     for (const block of data.message.content) {
       if (block.type === "tool_result" && block.content !== undefined) {
