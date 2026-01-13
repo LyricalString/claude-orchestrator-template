@@ -242,7 +242,7 @@ export function getSessions(projectId?: number, limit: number = 50): Session[] {
       (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.id AND a.status = 'running') as running_count
     FROM sessions s
     JOIN projects p ON s.project_id = p.id
-    WHERE 1=1
+    WHERE (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.id) > 0
   `;
   const params: (string | number)[] = [];
 
