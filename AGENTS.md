@@ -279,7 +279,7 @@ The orchestrator uses an MCP server to spawn and manage subagents:
 | Tool | Purpose |
 | ---- | ------- |
 | `mcp__orchestrator__spawn_agent` | Launch a subagent with a specific task |
-| `mcp__orchestrator__get_agent_status` | Check status and read output of an agent |
+| `mcp__orchestrator__get_agent_status` | Check agent status (use log tools for output) |
 | `mcp__orchestrator__list_agents` | List all available and spawned agents |
 | `mcp__orchestrator__kill_agent` | Terminate a running agent |
 | `mcp__orchestrator__read_agent_log` | Read agent logs with optional `offset`, `limit`, `tail` params |

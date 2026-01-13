@@ -552,7 +552,7 @@ async function waitForAgent(task: AgentTask, timeoutMs: number): Promise<void> {
 }
 
 /**
- * Get the status and output of an agent
+ * Get the status of an agent (without output - use read_agent_log for that)
  * @param block - If true, wait for agent to complete before returning
  * @param timeoutMs - Maximum time to wait in milliseconds (default: 5 minutes)
  */
@@ -560,7 +560,7 @@ async function getAgentStatus(
   taskId: string,
   block: boolean = false,
   timeoutMs: number = 300000
-): Promise<{ task: AgentTask; output: string; timedOut?: boolean } | { error: string }> {
+): Promise<{ task: AgentTask; timedOut?: boolean } | { error: string }> {
   const task = runningAgents.get(taskId);
   if (!task) {
     return { error: `Task '${taskId}' not found` };
@@ -571,25 +571,14 @@ async function getAgentStatus(
     try {
       await waitForAgent(task, timeoutMs);
     } catch (err: any) {
-      // Read current output even on timeout
-      let output = "";
-      if (fs.existsSync(task.logFile)) {
-        output = fs.readFileSync(task.logFile, "utf-8");
-      }
-      return { task, output, timedOut: true };
+      return { task, timedOut: true };
     }
   } else {
     // Non-blocking: just check current status
     isAgentRunning(task);
   }
 
-  // Read log
-  let output = "";
-  if (fs.existsSync(task.logFile)) {
-    output = fs.readFileSync(task.logFile, "utf-8");
-  }
-
-  return { task, output };
+  return { task };
 }
 
 /**
@@ -671,7 +660,7 @@ server.tool(
 // Tool: get_agent_status
 server.tool(
   "get_agent_status",
-  "Get the status and output of a running or completed agent task. Use block=true to wait for completion.",
+  "Get the status of an agent task. Use block=true to wait for completion. Use read_agent_log or search_agent_logs to view output.",
   {
     taskId: z.string().describe("The task ID returned by spawn_agent"),
     block: z.boolean().optional().default(false).describe("If true, wait for agent to complete before returning (default: false)"),
@@ -697,8 +686,7 @@ server.tool(
           startedAt: result.task.startedAt,
           completedAt: result.task.completedAt,
           exitCode: result.task.exitCode,
-          timedOut: result.timedOut || false,
-          output: result.output
+          timedOut: result.timedOut || false
         }, null, 2)
       }]
     };
