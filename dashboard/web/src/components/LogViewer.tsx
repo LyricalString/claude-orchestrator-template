@@ -4,6 +4,7 @@ import {
   parseLog,
   formatDuration,
   formatCost,
+  formatTokens,
   type LogEntry,
 } from "../utils/logParser";
 
@@ -91,6 +92,8 @@ export function LogViewer({ agent, log, onClose }: LogViewerProps) {
 }
 
 function LogEntryComponent({ entry }: { entry: LogEntry }) {
+  const [expanded, setExpanded] = useState(false);
+
   switch (entry.type) {
     case "header":
       return null; // Don't show header, it's redundant with the panel header
@@ -115,14 +118,29 @@ function LogEntryComponent({ entry }: { entry: LogEntry }) {
         </div>
       );
 
-    case "tool_result":
+    case "tool_result": {
+      const lines = entry.content.split("\n");
+      const isLong = lines.length > 8 || entry.content.length > 500;
+      const displayContent = isLong && !expanded
+        ? lines.slice(0, 6).join("\n") + "\n..."
+        : entry.content;
+
       return (
         <div
           className={`log-entry log-entry-result ${entry.isError ? "error" : ""}`}
         >
-          <pre className="tool-output">{entry.content}</pre>
+          <pre className="tool-output">{displayContent}</pre>
+          {isLong && (
+            <button
+              className="expand-btn"
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? "Show less" : `Show more (${lines.length} lines)`}
+            </button>
+          )}
         </div>
       );
+    }
 
     case "result":
       return (
@@ -148,8 +166,7 @@ function LogEntryComponent({ entry }: { entry: LogEntry }) {
               <span className="stat">
                 <span className="stat-label">Tokens:</span>
                 <span className="stat-value">
-                  {entry.stats.input_tokens.toLocaleString()} in /{" "}
-                  {entry.stats.output_tokens.toLocaleString()} out
+                  {formatTokens(entry.stats)}
                 </span>
               </span>
               <span className="stat">

@@ -14,8 +14,17 @@ export interface LogEntry {
     total_cost_usd: number;
     input_tokens: number;
     output_tokens: number;
+    cache_read_tokens: number;
+    cache_creation_tokens: number;
     num_turns: number;
   };
+}
+
+interface StreamJsonUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
 }
 
 interface StreamJsonMessage {
@@ -33,10 +42,7 @@ interface StreamJsonMessage {
   duration_ms?: number;
   total_cost_usd?: number;
   num_turns?: number;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-  };
+  usage?: StreamJsonUsage;
   tool_use_result?: {
     stdout?: string;
     stderr?: string;
@@ -49,6 +55,21 @@ export function parseLog(rawLog: string): LogEntry[] {
 
   let inHeader = false;
   let headerLines: string[] = [];
+  let finalResultText: string | null = null;
+
+  // First pass: find the final result text to avoid duplicates
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed === "---") continue;
+    try {
+      const data = JSON.parse(trimmed) as StreamJsonMessage;
+      if (data.type === "result" && data.result) {
+        finalResultText = data.result;
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -56,11 +77,7 @@ export function parseLog(rawLog: string): LogEntry[] {
     // Handle header section (--- delimited)
     if (trimmed === "---") {
       if (inHeader) {
-        // End of header
-        entries.push({
-          type: "header",
-          content: headerLines.join("\n"),
-        });
+        // End of header - skip, we show this info in the panel header
         headerLines = [];
       }
       inHeader = !inHeader;
@@ -78,25 +95,19 @@ export function parseLog(rawLog: string): LogEntry[] {
     // Try to parse as JSON
     try {
       const data = JSON.parse(trimmed) as StreamJsonMessage;
-      const entry = parseJsonEntry(data);
+      const entry = parseJsonEntry(data, finalResultText);
       if (entry) {
         entries.push(entry);
       }
     } catch {
-      // Not JSON, might be plain text
-      if (trimmed && !trimmed.startsWith("{")) {
-        entries.push({
-          type: "text",
-          content: trimmed,
-        });
-      }
+      // Not JSON - skip non-JSON lines (usually artifacts)
     }
   }
 
   return entries;
 }
 
-function parseJsonEntry(data: StreamJsonMessage): LogEntry | null {
+function parseJsonEntry(data: StreamJsonMessage, finalResultText: string | null): LogEntry | null {
   // Skip init messages
   if (data.type === "system" && data.subtype === "init") {
     return null;
@@ -106,6 +117,10 @@ function parseJsonEntry(data: StreamJsonMessage): LogEntry | null {
   if (data.type === "assistant" && data.message?.content) {
     for (const block of data.message.content) {
       if (block.type === "text" && block.text) {
+        // Skip if this text is the same as the final result (avoid duplication)
+        if (finalResultText && block.text === finalResultText) {
+          return null;
+        }
         return {
           type: "text",
           content: block.text,
@@ -129,21 +144,24 @@ function parseJsonEntry(data: StreamJsonMessage): LogEntry | null {
     const content = stderr ? `${stdout}\n${stderr}` : stdout;
     return {
       type: "tool_result",
-      content: content.slice(0, 500) + (content.length > 500 ? "\n..." : ""),
+      content: content,
       isError: !!stderr,
     };
   }
 
   // Final result
   if (data.type === "result") {
+    const usage = data.usage || {};
     return {
       type: "result",
       content: data.result || "Task completed",
       stats: {
         duration_ms: data.duration_ms || 0,
         total_cost_usd: data.total_cost_usd || 0,
-        input_tokens: data.usage?.input_tokens || 0,
-        output_tokens: data.usage?.output_tokens || 0,
+        input_tokens: usage.input_tokens || 0,
+        output_tokens: usage.output_tokens || 0,
+        cache_read_tokens: usage.cache_read_input_tokens || 0,
+        cache_creation_tokens: usage.cache_creation_input_tokens || 0,
         num_turns: data.num_turns || 0,
       },
     };
@@ -193,4 +211,17 @@ export function formatDuration(ms: number): string {
 export function formatCost(usd: number): string {
   if (usd < 0.01) return `$${usd.toFixed(4)}`;
   return `$${usd.toFixed(2)}`;
+}
+
+export function formatTokens(stats: NonNullable<LogEntry["stats"]>): string {
+  const totalInput = stats.input_tokens + stats.cache_read_tokens + stats.cache_creation_tokens;
+
+  if (stats.cache_read_tokens > 0 || stats.cache_creation_tokens > 0) {
+    const parts: string[] = [];
+    if (stats.input_tokens > 0) parts.push(`${stats.input_tokens.toLocaleString()} new`);
+    if (stats.cache_read_tokens > 0) parts.push(`${stats.cache_read_tokens.toLocaleString()} cached`);
+    return `${totalInput.toLocaleString()} in (${parts.join(", ")}) / ${stats.output_tokens.toLocaleString()} out`;
+  }
+
+  return `${totalInput.toLocaleString()} in / ${stats.output_tokens.toLocaleString()} out`;
 }

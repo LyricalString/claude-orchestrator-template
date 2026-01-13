@@ -422,8 +422,6 @@ body {
 .log-entry-result {
   background: var(--bg-tertiary);
   border-left: 2px solid var(--text-muted);
-  max-height: 200px;
-  overflow-y: auto;
 }
 
 .log-entry-result.error {
@@ -438,6 +436,20 @@ body {
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.expand-btn {
+  background: none;
+  border: none;
+  color: var(--accent-blue);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 0;
+  margin-top: 4px;
+}
+
+.expand-btn:hover {
+  text-decoration: underline;
 }
 
 .log-entry-final {
