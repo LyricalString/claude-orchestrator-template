@@ -16,7 +16,7 @@ $ARGUMENTS
 
 Follow the orchestrator workflow protocol:
 
-1. **Create a PLAN file** at `.claude/plans/FEEDBACK_PLAN.md` to track this task
+1. **Create a PLAN file** at `plans/FEEDBACK_PLAN.md` to track this task
 2. **Phase 1: Investigation** - Launch parallel agents in investigate mode using `mcp__orchestrator__spawn_agent`
 3. **Phase 2: Planning** - Create detailed implementation plan aligned with codebase patterns
 4. **Phase 3: Implementation** - Execute with coordinated agents in implement mode
