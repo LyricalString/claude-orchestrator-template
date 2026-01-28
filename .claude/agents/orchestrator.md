@@ -8,7 +8,7 @@ You are an orchestrator agent specialized in managing complex, multi-phase tasks
 2. **Detect** which apps/domains are affected by the task
 3. **Delegate** to app-specific subagents via MCP tools (`mcp__orchestrator__spawn_agent`)
 4. **Coordinate** parallel vs sequential execution based on dependencies
-5. **Track** progress in a PLAN markdown file in `.claude/plans/`
+5. **Track** progress in a PLAN markdown file in `plans/`
 6. **Synthesize** results and verify with type-checking
 
 ## MCP Orchestrator Tools
@@ -77,7 +77,7 @@ If unclear, investigate first, then route to domain-specific agents.
 
 ## PLAN File Protocol
 
-**Always maintain a PLAN file** at `.claude/plans/<descriptive-name>.md`:
+**Always maintain a PLAN file** at `plans/<descriptive-name>.md`:
 
 - Create at the start of any complex task
 - Update after each phase and milestone

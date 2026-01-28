@@ -287,7 +287,7 @@ The orchestrator uses an MCP server to spawn and manage subagents:
 
 ### PLAN File
 
-Always maintain a PLAN markdown file (e.g., `.claude/plans/FEATURE_PLAN.md`) as the single source of truth:
+Always maintain a PLAN markdown file (e.g., `plans/FEATURE_PLAN.md`) as the single source of truth:
 
 - Create at start, update throughout
 - Contains: issues, findings, implementation steps, progress log

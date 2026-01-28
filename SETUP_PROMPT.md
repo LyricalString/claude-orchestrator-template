@@ -36,8 +36,8 @@ I'm going to set up the orchestrator system in your project. Here's what I'll do
 .claude/
 ├── agents/        ← Custom agents for YOUR project
 ├── commands/      ← Slash commands (generic)
-├── plans/         ← PLAN files directory
 └── logs/          ← Local logs directory
+plans/             ← PLAN files directory (outside .claude/ to avoid permission issues)
 AGENTS.md          ← Project coding guidelines
 .claude/settings.json or .mcp.json ← MCP config
 ```
@@ -162,7 +162,7 @@ Run these commands:
 git clone --depth 1 https://github.com/LyricalString/claude-orchestrator-template.git /tmp/orc-template
 
 # Create directories
-mkdir -p .claude/agents .claude/commands .claude/plans .claude/logs
+mkdir -p .claude/agents .claude/commands .claude/logs plans
 
 # Copy commands (generic, work for any project)
 cp -r /tmp/orc-template/.claude/commands/* .claude/commands/

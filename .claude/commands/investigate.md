@@ -14,7 +14,7 @@ $ARGUMENTS
 
 ## Instructions
 
-1. **Create a PLAN file** at `.claude/plans/` if one doesn't exist for this task
+1. **Create a PLAN file** at `plans/<TASK_NAME>_PLAN.md` if one doesn't exist for this task
 2. Create a TodoWrite list to track each issue/area to investigate
 3. Launch **parallel agents** in `investigate` mode using `mcp__orchestrator__spawn_agent`:
 

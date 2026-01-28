@@ -71,6 +71,24 @@ Both methods update the global installation (MCP server + dashboard) without tou
 
 ---
 
+## Migration (Existing Users)
+
+If you installed before this change, PLAN files were stored in `.claude/plans/`. This caused permission prompts because Claude Code treats `.claude/` as self-modification.
+
+Run the migration script to move to the new `plans/` location:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/LyricalString/claude-orchestrator-template/main/migrate-plans.sh | bash
+```
+
+This will:
+1. Create `plans/` directory
+2. Move existing PLAN files from `.claude/plans/`
+3. Update `.gitignore`
+4. Optionally update local file references
+
+---
+
 ## What is This?
 
 An orchestrated workflow for Claude Code, designed for monorepos with multiple apps. Uses an MCP server to spawn and coordinate subagents:
@@ -212,11 +230,13 @@ your-project/
 │   │   ├── client-feedback.md
 │   │   ├── investigate.md
 │   │   └── ...
-│   ├── plans/            # PLAN files for tracking work
 │   └── logs/             # Local agent logs
+├── plans/                # PLAN files for tracking work (outside .claude/)
 ├── AGENTS.md             # Project-wide coding conventions
 └── .mcp.json             # MCP server config (points to global install)
 ```
+
+> **Note**: PLAN files are stored in `plans/` (not `.claude/plans/`) to avoid Claude Code permission prompts when writing files.
 
 Global installation:
 
@@ -252,7 +272,7 @@ cd your-project
 git clone --depth 1 https://github.com/LyricalString/claude-orchestrator-template.git /tmp/orc-template
 
 # Copy commands and template agents
-mkdir -p .claude/agents .claude/commands .claude/plans .claude/logs
+mkdir -p .claude/agents .claude/commands .claude/logs plans
 cp -r /tmp/orc-template/.claude/commands/* .claude/commands/
 cp -r /tmp/orc-template/.claude/agents/* .claude/agents/
 cp /tmp/orc-template/AGENTS.md ./

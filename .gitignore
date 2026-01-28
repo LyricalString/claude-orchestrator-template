@@ -31,3 +31,10 @@ coverage/
 # Temporary files
 *.tmp
 *.temp
+
+# Claude Code plans (session-specific, not committed)
+plans/
+
+# Claude Code local settings and logs
+.claude/logs/
+.claude/settings.local.json
