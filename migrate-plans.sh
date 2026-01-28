@@ -34,7 +34,7 @@ fi
 
 # Move existing PLAN files if .claude/plans/ exists
 if [ -d ".claude/plans" ]; then
-    file_count=$(find .claude/plans -name "*.md" 2>/dev/null | wc -l)
+    file_count=$(find .claude/plans -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
 
     if [ "$file_count" -gt 0 ]; then
         echo "📦 Moving $file_count PLAN file(s) from .claude/plans/ to plans/"
@@ -93,8 +93,23 @@ if [ ${#files_to_update[@]} -gt 0 ]; then
         echo "  - $file"
     done
     echo ""
-    read -p "Update these files? (y/n) " -n 1 -r
-    echo ""
+
+    # Check if running interactively (stdin is a terminal)
+    # When run via curl | bash, stdin is the script itself, not a terminal
+    if [ -t 0 ]; then
+        read -p "Update these files? (y/n) " -n 1 -r
+        echo ""
+    else
+        # Non-interactive mode (e.g., curl | bash): try reading from /dev/tty
+        if [ -e /dev/tty ]; then
+            read -p "Update these files? (y/n) " -n 1 -r < /dev/tty
+            echo ""
+        else
+            # No terminal available, default to yes for automation
+            echo "Non-interactive mode detected, auto-updating files..."
+            REPLY="y"
+        fi
+    fi
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         for file in "${files_to_update[@]}"; do
